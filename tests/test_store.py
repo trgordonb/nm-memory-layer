@@ -72,6 +72,17 @@ class TestRecordAndResume:
         call = store.load_session(sid)[1].tool_calls[0]
         assert {"name", "args", "id"} <= set(call.keys())
 
+    def test_content_stored_verbatim_including_trailing_newline(self, store):
+        """Regression: tool outputs ending in \\n must be archived byte-faithfully
+        (trailing-whitespace stripping broke exact comparisons against LangSmith)."""
+        sid = store.new_session_id()
+        store.record_turn(
+            sid,
+            [HumanMessage(content="run it"), AIMessage(content="Output:\nrc=1\ndone\n")],
+        )
+        stored = store.load_session(sid)[1].content
+        assert stored.endswith("done\n")
+
 
 class TestSearch:
     def test_fts_match_returns_hits(self, store, tool):

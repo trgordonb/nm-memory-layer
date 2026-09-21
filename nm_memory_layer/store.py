@@ -131,7 +131,7 @@ class SessionStore:
                 turn_seq = (row[0] + 1) if row else 1
             seq = 0
             for message in messages:
-                content = self._message_text(message).strip()
+                raw_content = self._message_text(message)
                 role = self._role_of(message)
                 tool_name = None
                 tool_call_id = None
@@ -142,16 +142,19 @@ class SessionStore:
                         for call in message.tool_calls
                     ]
                     tool_calls_json = json.dumps(calls)
-                    if not content:
-                        content = "\n".join(
+                    if not raw_content.strip():
+                        raw_content = "\n".join(
                             f"[tool call: {call['name']}({json.dumps(call['args'], default=str)})]"
                             for call in calls
                         )
                 if isinstance(message, ToolMessage):
                     tool_name = message.name
                     tool_call_id = message.tool_call_id
-                if not content:
+                # Store content verbatim (no strip) so the archive is byte-faithful
+                # to what the provider saw; only skip truly empty messages.
+                if not raw_content.strip():
                     continue
+                content = raw_content
                 conn.execute(
                     "INSERT INTO sessions (session_id, turn_seq, seq, role, tool_name, tool_call_id, tool_calls, content, timestamp) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
