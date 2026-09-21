@@ -4,14 +4,13 @@ Standalone memory layer for AI agents, extracted from the `langgraph-demo` agent
 
 ## Current status
 
-**Phases 1–4 + search summarization complete:**
+**All five phases complete — full Hermes-style memory stack:**
 - **Phase 1: Episodic session store (SQLite + FTS5)** — `store.py`
 - **Phase 2: Prompt memory (always-on MEMORY.md / USER.md)** — `prompt_memory.py`
 - **Phase 3: Periodic nudge (agent-curated memory)** — `nudge.py`
 - **Phase 4: Skills (procedural memory, progressive disclosure)** — `skills.py`
 - **Search summarization (secondary-LLM condensation of FTS5 excerpts)** — `summarizer.py`
-
-Phase 5 (context compression) remains.
+- **Phase 5: Context compression with lineage** — `compression.py`
 
 ## Layout
 
@@ -22,7 +21,8 @@ nm_memory_layer/
 ├── prompt_memory.py  # PromptMemory + memory_manage tool factory (always-on)
 ├── nudge.py          # NudgePolicy + nudge prompt + transcript flattener (curation)
 ├── skills.py         # SkillLibrary + skill_manage/load_skill tools (procedural)
-└── summarizer.py     # Secondary-LLM condensation of session_search excerpts
+├── summarizer.py     # Secondary-LLM condensation of session_search excerpts
+└── compression.py    # Pre-flight context compression with lineage
 ```
 
 ## Public API
@@ -68,6 +68,15 @@ load_skill_tool = create_load_skill_tool(library)
 # Search summarization (secondary LLM, env-toggled)
 summarizer = create_openrouter_summarizer()   # None unless enabled+configured
 tool = create_session_search_tool(store, summarizer=summarizer)
+
+# Context compression (Phase 5, env-toggled; uses the OpenRouter model)
+compressor = create_openrouter_compressor()   # None unless enabled+configured
+res = compressor.compress(messages)           # sync; run in a thread from async code
+if res.compressed:
+    messages = res.compressed_messages        # first turn + summary + recent turns
+    store.record_compression(session_id, res.summary, res.summarized_first_turn,
+                             res.summarized_last_turn, res.original_count, res.model_label)
+store.list_compressions(session_id)           # lineage chain
 ```
 
 ### Search summarizer (env-toggled)
@@ -76,6 +85,17 @@ tool = create_session_search_tool(store, summarizer=summarizer)
 - `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `OPENROUTER_BASE_URL` (default `https://openrouter.ai/api/v1`) — secondary provider config.
 - When enabled, `session_search` fetches extra excerpts (≥8 vs the agent's requested limit), condenses them via ONE secondary-LLM call, and returns a summary with a `[session_search: condensed by <label> in <ms>ms from <n> raw excerpts]` header — built-in observability for A/B comparison.
 - Failure semantics: missing config, API error, or timeout → silent fallback to raw excerpts; empty summary → explicit "No past session matches relevant to this query." Search never breaks because the summarizer did.
+
+### Context compression (env-toggled)
+
+- `COMPRESSION_ENABLED` — flips the feature (default off).
+- `COMPRESSION_TOKEN_THRESHOLD` (default 24000, ~4 chars/token) — pre-flight trigger.
+- `COMPRESSION_KEEP_RECENT_TURNS` (default 2) — recent turns kept verbatim.
+- Model: the OpenRouter config (`OPENROUTER_API_KEY` / `OPENROUTER_MODEL` / `OPENROUTER_BASE_URL`), shared with the summarizer.
+- Semantics: middle turns are summarized (first turn + recent turns stay verbatim); the summary is injected as a `<conversation_summary>` SystemMessage that points back to the archive; lineage (turn range + summary + model) is persisted to the `compressions` table via `store.record_compression`.
+- **Usage measure**: the trigger uses the provider-reported `prompt_tokens` of the last AIMessage's `response_metadata` (includes system prompt + tool schemas — matching what the provider actually processed), falling back to a chars/4 estimate when absent. Structurally, compression needs ≥ `COMPRESSION_KEEP_RECENT_TURNS + 2` turns (there must be a middle to summarize).
+- Failure semantics: model error, empty/pseudo-tool output, or too-few-turns → original history returned untouched.
+- Note: compression is in-memory per run. The archive always holds the full verbatim transcript, so after a restart/resume the history is re-evaluated and may be re-compressed (idempotent outcome, one extra LLM call).
 
 ### Consumer responsibilities (Phase 2 contract)
 

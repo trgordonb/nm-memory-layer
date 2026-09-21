@@ -8,6 +8,15 @@ Provides a Hermes-style memory architecture:
   pair injected into every session's system prompt.
 """
 
+from .compression import (
+    DEFAULT_COMPRESSION_KEEP_RECENT,
+    DEFAULT_COMPRESSION_TOKEN_THRESHOLD,
+    CompressionResult,
+    ConversationCompressor,
+    create_openrouter_compressor,
+    estimate_tokens,
+    split_into_turns,
+)
 from .nudge import DEFAULT_NUDGE_INTERVAL, NudgePolicy, build_nudge_prompt, flatten_transcript
 from .prompt_memory import MEMORY_CHAR_LIMIT, PromptMemory, create_memory_manage_tool
 from .skills import SkillLibrary, create_load_skill_tool, create_skill_manage_tool
@@ -15,8 +24,12 @@ from .store import SessionSearchHit, SessionStore, create_session_search_tool
 from .summarizer import SearchSummarizer, SummarizedSearch, create_openrouter_summarizer
 
 __all__ = [
+    "DEFAULT_COMPRESSION_KEEP_RECENT",
+    "DEFAULT_COMPRESSION_TOKEN_THRESHOLD",
     "DEFAULT_NUDGE_INTERVAL",
     "MEMORY_CHAR_LIMIT",
+    "CompressionResult",
+    "ConversationCompressor",
     "NudgePolicy",
     "PromptMemory",
     "SearchSummarizer",
@@ -27,8 +40,11 @@ __all__ = [
     "build_nudge_prompt",
     "create_load_skill_tool",
     "create_memory_manage_tool",
+    "create_openrouter_compressor",
     "create_openrouter_summarizer",
     "create_session_search_tool",
     "create_skill_manage_tool",
+    "estimate_tokens",
     "flatten_transcript",
+    "split_into_turns",
 ]

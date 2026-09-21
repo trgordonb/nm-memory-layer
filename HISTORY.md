@@ -2,6 +2,16 @@
 
 Changelog of notable changes. Dates are implementation dates.
 
+## 2026-09-21 — Phase 5: Context compression with lineage
+
+Hermes-style pre-flight compression: when the conversation's estimated token size (~4 chars/token, no tokenizer dependency) crosses `COMPRESSION_TOKEN_THRESHOLD`, the middle turns are summarized by the secondary LLM (OpenRouter model, shared config with the summarizer) while the first turn (original task) and the most recent `COMPRESSION_KEEP_RECENT_TURNS` turns stay verbatim.
+
+- `split_into_turns`: segments the message list on HumanMessage boundaries; non-human preamble (e.g. injected SystemMessages) stays attached to the first turn.
+- `ConversationCompressor.compress`: sync LLM call over ONLY the middle turns' flattened transcript; summary is truncated to the char budget and injected as a `<conversation_summary turns="a-b">` SystemMessage that points back to the session archive. Tool-call pairs are removed as whole segments, so pairing can never dangle.
+- Lineage: `SessionStore.record_compression` / `list_compressions` persist the summarized turn range, summary text, message count, and model to the new `compressions` table. The archive itself always keeps every turn verbatim and searchable.
+- Failure semantics: model errors, empty/pseudo-tool output, or edge cases (too few turns) return the original history untouched. Compression state is in-memory per run; resumed sessions are re-evaluated.
+- Env: `COMPRESSION_ENABLED` (default off), `COMPRESSION_TOKEN_THRESHOLD` (24000), `COMPRESSION_KEEP_RECENT_TURNS` (2).
+
 ## 2026-09-21 — Search summarizer: weak-model robustness
 
 Live run with a tiny free model (`liquid/lfm-2.5-2.6b:free`) showed two failure modes: message content arriving as a block list (previously `str()`-ed into Python-repr garbage) and the model leaking its chat template's special tokens while hallucinating tool-call syntax (`<|tool_call_start|>[summarize(...)]<|tool_call_end|>`) instead of answering.

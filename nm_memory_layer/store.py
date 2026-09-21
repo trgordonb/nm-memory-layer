@@ -87,6 +87,17 @@ class SessionStore:
                 created_at REAL NOT NULL,
                 last_turn INTEGER NOT NULL DEFAULT 0
             );
+
+            CREATE TABLE IF NOT EXISTS compressions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                summarized_first_turn INTEGER NOT NULL,
+                summarized_last_turn INTEGER NOT NULL,
+                message_count INTEGER NOT NULL,
+                summary TEXT NOT NULL,
+                model TEXT,
+                created_at REAL NOT NULL
+            );
             """
         )
         conn.commit()
@@ -256,6 +267,46 @@ class SessionStore:
                 snippet=row[3][:600],
                 timestamp=row[4],
             )
+            for row in rows
+        ]
+
+    def record_compression(
+        self,
+        session_id: str,
+        summary: str,
+        summarized_first_turn: int,
+        summarized_last_turn: int,
+        message_count: int,
+        model: str | None = None,
+    ) -> int:
+        """Persist a compression event (lineage: summarized turn range + summary)."""
+        conn = self._connect()
+        with conn:
+            cur = conn.execute(
+                "INSERT INTO compressions (session_id, summarized_first_turn, summarized_last_turn, "
+                "message_count, summary, model, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (session_id, summarized_first_turn, summarized_last_turn, message_count, summary, model, time.time()),
+            )
+        return cur.lastrowid
+
+    def list_compressions(self, session_id: str) -> list[dict]:
+        """Lineage chain: every compression event for a session, oldest first."""
+        conn = self._connect()
+        rows = conn.execute(
+            "SELECT id, summarized_first_turn, summarized_last_turn, message_count, summary, model, created_at "
+            "FROM compressions WHERE session_id = ? ORDER BY id",
+            (session_id,),
+        ).fetchall()
+        return [
+            {
+                "id": row[0],
+                "summarized_first_turn": row[1],
+                "summarized_last_turn": row[2],
+                "message_count": row[3],
+                "summary": row[4],
+                "model": row[5],
+                "created_at": row[6],
+            }
             for row in rows
         ]
 
