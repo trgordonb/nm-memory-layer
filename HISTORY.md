@@ -2,6 +2,15 @@
 
 Changelog of notable changes. Dates are implementation dates.
 
+## 2026-09-21 — Phase 4: Skills layer (procedural memory)
+
+- `SkillLibrary` (`skills.py`): manages an agentskills.io-compatible skills directory (`$SKILLS_DIR` or `./skills`), scanning `**/SKILL.md` with YAML frontmatter (pyyaml added as dependency). Supports category nesting (`skills/<category>/<name>/`).
+- Progressive disclosure: `render_index()` emits a `<skills_index>` block with names + descriptions only (consumer injects once per session); `load_skill(name)` returns the full SKILL.md on demand. Body content never leaks into the index.
+- `skill_manage` tool with six actions — create / patch / edit / delete / write_file / remove_file — mirroring the Hermes toolset; docstring teaches the patch-over-edit preference and the creation triggers (5+ tool calls, error recovery, user correction, non-obvious workflow).
+- `load_skill` tool: the agent-facing progressive-disclosure second step.
+- Filesystem safety: slug-validated names, category slugs, duplicate-create rejection, path-traversal guards, whole-directory delete.
+- Nudge integration: `build_nudge_prompt` now also teaches skill curation (create/patch on trigger; skills are procedures, prompt memory is facts — no duplication).
+
 ## 2026-09-21 — Phase 3: Periodic nudge (agent-curated memory)
 
 - `NudgePolicy` (`nudge.py`): per-session turn counter; `should_nudge` fires every N completed turns (default 5), `mark_nudged` resets. Interval floors at 1.

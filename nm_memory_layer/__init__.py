@@ -10,6 +10,7 @@ Provides a Hermes-style memory architecture:
 
 from .nudge import DEFAULT_NUDGE_INTERVAL, NudgePolicy, build_nudge_prompt, flatten_transcript
 from .prompt_memory import MEMORY_CHAR_LIMIT, PromptMemory, create_memory_manage_tool
+from .skills import SkillLibrary, create_load_skill_tool, create_skill_manage_tool
 from .store import SessionSearchHit, SessionStore, create_session_search_tool
 
 __all__ = [
@@ -19,8 +20,11 @@ __all__ = [
     "PromptMemory",
     "SessionSearchHit",
     "SessionStore",
+    "SkillLibrary",
     "build_nudge_prompt",
+    "create_load_skill_tool",
     "create_memory_manage_tool",
     "create_session_search_tool",
+    "create_skill_manage_tool",
     "flatten_transcript",
 ]

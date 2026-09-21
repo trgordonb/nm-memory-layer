@@ -4,12 +4,13 @@ Standalone memory layer for AI agents, extracted from the `langgraph-demo` agent
 
 ## Current status
 
-**Phases 1–3 complete:**
+**Phases 1–4 complete:**
 - **Phase 1: Episodic session store (SQLite + FTS5)** — `store.py`
 - **Phase 2: Prompt memory (always-on MEMORY.md / USER.md)** — `prompt_memory.py`
 - **Phase 3: Periodic nudge (agent-curated memory)** — `nudge.py`
+- **Phase 4: Skills (procedural memory, progressive disclosure)** — `skills.py`
 
-Later phases (skills, compression) land here first, then get consumed by agents.
+Phase 5 (context compression) remains.
 
 ## Layout
 
@@ -18,7 +19,8 @@ nm_memory_layer/
 ├── __init__.py       # Public API
 ├── store.py          # SessionStore + session_search tool factory (episodic)
 ├── prompt_memory.py  # PromptMemory + memory_manage tool factory (always-on)
-└── nudge.py          # NudgePolicy + nudge prompt + transcript flattener (curation)
+├── nudge.py          # NudgePolicy + nudge prompt + transcript flattener (curation)
+└── skills.py         # SkillLibrary + skill_manage/load_skill tools (procedural)
 ```
 
 ## Public API
@@ -51,6 +53,15 @@ policy.record_turn(session_id)          # call after each completed turn
 policy.should_nudge(session_id)         # -> bool; then policy.mark_nudged(session_id)
 build_nudge_prompt(chars_used, char_budget)  # system prompt for the internal LLM call
 flatten_transcript(messages)            # plain-text transcript (no tool-pairing constraints)
+
+# Procedural (Phase 4)
+library = SkillLibrary()                # dir: $SKILLS_DIR or ./skills (agentskills.io layout)
+library.render_index()                  # names + descriptions ONLY — load once per session
+library.load_skill(name)                # full SKILL.md — the on-demand second step
+library.create_skill / patch_skill / edit_skill / delete_skill /
+    write_skill_file / remove_skill_file
+skill_manage_tool = create_skill_manage_tool(library)
+load_skill_tool = create_load_skill_tool(library)
 ```
 
 ### Consumer responsibilities (Phase 2 contract)
@@ -69,12 +80,15 @@ flatten_transcript(messages)            # plain-text transcript (no tool-pairing
 - **Two-layer boundary is the agent's judgment call** — the `memory_manage` docstring teaches it: MEMORY.md/USER.md only for knowledge needed every session; everything topic-specific stays in the session archive.
 - **Nudge bias toward silence** — the nudge prompt states that most turns produce no writes and silence is valid; curation over accumulation. Nudge activity itself is never written to the session archive.
 - **Transcript flattening for the nudge** — recent turns are rendered as plain text (`flatten_transcript`) because the nudge LLM binds only the memory tool; sending original AIMessage tool_calls referencing other tools would be provider-invalid.
+- **Progressive disclosure keeps skill tokens flat** — the index carries only name + description; full SKILL.md enters context solely via `load_skill`. An agent with 200 skills pays roughly the same index cost as one with 40.
+- **patch over edit** — `skill_manage` offers both, but patch (exact-string replacement) is the preferred update path: safer and more token-efficient than full rewrites. The tool docstring teaches this.
+- **Filesystem guards** — skill names are slugs (`[a-z0-9][a-z0-9_-]*`); `write_skill_file`/`remove_skill_file` reject absolute paths, `..` traversal, and empty paths; deletes remove the whole skill directory.
 
 ## Roadmap (from the Hermes implementation plan)
 
 - ~~Phase 2: Prompt memory (`MEMORY.md` / `USER.md`, 3,575-char shared budget, add/replace/remove ops)~~ ✓ 2026-09-21
 - ~~Phase 3: Periodic nudge — agent-curated memory classification (prompt memory vs. session archive vs. nothing)~~ ✓ 2026-09-21
-- Phase 4: Skills layer — agentskills.io-style SKILL.md files, progressive disclosure, `skill_manage` with patch preference
+- ~~Phase 4: Skills layer — agentskills.io-style SKILL.md files, progressive disclosure, `skill_manage` with patch preference~~ ✓ 2026-09-21
 - Phase 5: Context compression with lineage preserved in SQLite
 
 ## Dev
