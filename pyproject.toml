@@ -1,0 +1,16 @@
+[project]
+name = "nm-memory-layer"
+version = "0.1.0"
+description = "Standalone memory layer for AI agents: SQLite + FTS5 session store (Hermes-style episodic memory)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "langchain-core>=1.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["nm_memory_layer"]
