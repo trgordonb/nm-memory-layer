@@ -117,3 +117,23 @@ class TestSessionsListing:
         assert len(sessions) == 1
         assert sessions[0]["session_id"] == sid
         assert sessions[0]["turns"] == 1
+
+
+class TestCrossThread:
+    def test_connection_created_in_worker_thread_usable_from_main_thread(self, store):
+        """Regression: LangGraph runs sync tools (session_search) in a worker
+        thread, so the first store touch can create the connection there;
+        record_turn/close then happen on the event-loop thread. Without
+        check_same_thread=False this raises sqlite3.ProgrammingError."""
+        import threading
+
+        sid = store.new_session_id()
+        worker = threading.Thread(
+            target=lambda: store.record_turn(sid, [HumanMessage(content="written from worker thread")])
+        )
+        worker.start()
+        worker.join()
+
+        messages = store.load_session(sid)  # main thread
+        assert len(messages) == 1
+        store.close()  # main thread closing a worker-created connection

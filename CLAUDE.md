@@ -72,6 +72,7 @@ load_skill_tool = create_load_skill_tool(library)
 ## Design decisions
 
 - **WAL mode** — concurrent readers, single writer; safe for parallel sessions.
+- **`check_same_thread=False`** — the consumer may first touch the store from a LangGraph tool-executor thread (sync tools like `session_search` run in a worker pool) and later from the event-loop thread (`record_turn`, `close`). The connection is shared across threads deliberately; SQLite's C layer serializes access and WAL + `busy_timeout` handle contention.
 - **Full turn serialization** — assistant `tool_calls` and `tool_call_id` are persisted so `load_session()` reconstructs valid AIMessage→ToolMessage pairs; a dangling ToolMessage would break provider APIs on resume.
 - **Search fallback chain** — strict FTS5 `AND` match → `OR` of tokens (natural-language queries rarely satisfy implicit AND) → `LIKE` (invalid FTS5 syntax). Newest-first ordering.
 - **CWD-relative DB path** — the database belongs to the consuming agent's working directory, not this package. Override with `SESSION_DB_PATH`.

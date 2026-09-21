@@ -42,7 +42,12 @@ class SessionStore:
 
     def _connect(self) -> sqlite3.Connection:
         if self._conn is None:
-            conn = sqlite3.connect(self.db_path)
+            # check_same_thread=False: the consumer may first touch the store
+            # from a LangGraph tool-executor thread (sync tools run in a worker
+            # pool) and later from the event-loop/main thread. SQLite's C layer
+            # serializes access to a shared connection, and WAL mode plus
+            # busy_timeout handle lock contention; ops here are short.
+            conn = sqlite3.connect(self.db_path, check_same_thread=False)
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
             conn.execute("PRAGMA busy_timeout=5000")

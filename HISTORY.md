@@ -2,6 +2,10 @@
 
 Changelog of notable changes. Dates are implementation dates.
 
+## 2026-09-21 — Fix: cross-thread SQLite access
+
+- `SessionStore._connect` now opens the connection with `check_same_thread=False`. In the consumer agent, the first store touch can happen inside a LangGraph tool-executor thread (sync `session_search` runs in a worker pool) while `record_turn`/`close` run on the event-loop thread — the strict same-thread check raised `sqlite3.ProgrammingError` at CLI exit (and silently broke turn recording after any `session_search` call). Regression test added (worker-thread write → main-thread read/close).
+
 ## 2026-09-21 — Phase 4: Skills layer (procedural memory)
 
 - `SkillLibrary` (`skills.py`): manages an agentskills.io-compatible skills directory (`$SKILLS_DIR` or `./skills`), scanning `**/SKILL.md` with YAML frontmatter (pyyaml added as dependency). Supports category nesting (`skills/<category>/<name>/`).
