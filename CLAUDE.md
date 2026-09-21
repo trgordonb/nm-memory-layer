@@ -4,11 +4,12 @@ Standalone memory layer for AI agents, extracted from the `langgraph-demo` agent
 
 ## Current status
 
-**Phases 1–4 complete:**
+**Phases 1–4 + search summarization complete:**
 - **Phase 1: Episodic session store (SQLite + FTS5)** — `store.py`
 - **Phase 2: Prompt memory (always-on MEMORY.md / USER.md)** — `prompt_memory.py`
 - **Phase 3: Periodic nudge (agent-curated memory)** — `nudge.py`
 - **Phase 4: Skills (procedural memory, progressive disclosure)** — `skills.py`
+- **Search summarization (secondary-LLM condensation of FTS5 excerpts)** — `summarizer.py`
 
 Phase 5 (context compression) remains.
 
@@ -20,7 +21,8 @@ nm_memory_layer/
 ├── store.py          # SessionStore + session_search tool factory (episodic)
 ├── prompt_memory.py  # PromptMemory + memory_manage tool factory (always-on)
 ├── nudge.py          # NudgePolicy + nudge prompt + transcript flattener (curation)
-└── skills.py         # SkillLibrary + skill_manage/load_skill tools (procedural)
+├── skills.py         # SkillLibrary + skill_manage/load_skill tools (procedural)
+└── summarizer.py     # Secondary-LLM condensation of session_search excerpts
 ```
 
 ## Public API
@@ -62,7 +64,18 @@ library.create_skill / patch_skill / edit_skill / delete_skill /
     write_skill_file / remove_skill_file
 skill_manage_tool = create_skill_manage_tool(library)
 load_skill_tool = create_load_skill_tool(library)
+
+# Search summarization (secondary LLM, env-toggled)
+summarizer = create_openrouter_summarizer()   # None unless enabled+configured
+tool = create_session_search_tool(store, summarizer=summarizer)
 ```
+
+### Search summarizer (env-toggled)
+
+- `SEARCH_SUMMARIZER_ENABLED` (`true`/`1`/`yes`/`on`; default off) — flips the feature.
+- `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `OPENROUTER_BASE_URL` (default `https://openrouter.ai/api/v1`) — secondary provider config.
+- When enabled, `session_search` fetches extra excerpts (≥8 vs the agent's requested limit), condenses them via ONE secondary-LLM call, and returns a summary with a `[session_search: condensed by <label> in <ms>ms from <n> raw excerpts]` header — built-in observability for A/B comparison.
+- Failure semantics: missing config, API error, or timeout → silent fallback to raw excerpts; empty summary → explicit "No past session matches relevant to this query." Search never breaks because the summarizer did.
 
 ### Consumer responsibilities (Phase 2 contract)
 
@@ -96,7 +109,7 @@ load_skill_tool = create_load_skill_tool(library)
 
 ```bash
 uv sync
-uv run pytest tests/ -q   # 25 tests: store round-trips, FTS fallbacks, budget, tool ops
+uv run pytest tests/ -q   # 71 tests: store round-trips, FTS fallbacks, budget, tool ops, summarizer
 ```
 
 Add tests for every new memory-layer capability; the suite is the contract consumers rely on.

@@ -9,6 +9,7 @@ WAL mode allows concurrent readers with a single writer.
 """
 
 import json
+import logging
 import os
 import sqlite3
 import time
@@ -269,8 +270,14 @@ class SessionStore:
         ]
 
 
-def create_session_search_tool(store: SessionStore):
-    """Factory returning an agent-callable session_search tool bound to the store."""
+def create_session_search_tool(store: SessionStore, summarizer: "SearchSummarizer | Callable[..., object] | None" = None):
+    """Factory returning an agent-callable session_search tool bound to the store.
+
+    If a ``summarizer`` is provided, FTS5 excerpts are first condensed by a
+    secondary LLM (Hermes-style) before entering the agent's context; on any
+    summarizer failure the tool falls back to the raw excerpt list. Search
+    must never break because the summarizer did.
+    """
 
     @tool
     def session_search(query: str, limit: int = 5) -> str:
@@ -285,9 +292,36 @@ def create_session_search_tool(store: SessionStore):
         """
         if not query.strip():
             return "Error: empty query"
-        hits = store.search(query, limit=max(1, min(limit, 20)))
+        # With a summarizer, fetch extra material for it to condense.
+        search_limit = max(limit, 8) if summarizer is not None else max(1, min(limit, 20))
+        hits = store.search(query, limit=search_limit)
         if not hits:
             return "No past session matches found."
+        if summarizer is not None:
+            try:
+                result = summarizer.summarize(query, hits)
+            except Exception as exc:
+                logging.warning(
+                    "session_search summarizer failed (%s: %s) — falling back to raw excerpts",
+                    type(exc).__name__, str(exc)[:150],
+                )
+                result = None
+            if result is not None:
+                text = (result.text or "").strip()
+                if text.lower() == "none relevant":
+                    return "No past session matches relevant to this query."
+                if text:
+                    header = (
+                        f"[session_search: condensed by {result.model_label} "
+                        f"in {result.elapsed_ms}ms from {result.excerpt_count} raw excerpts]"
+                    )
+                    return f"{header}\n\n{text}"
+                # Empty content is a model/provider quirk (e.g. reasoning budget
+                # exhausted), not a relevance judgment — fall back to raw.
+                logging.warning(
+                    "session_search summarizer [%s] returned empty content — falling back to raw excerpts",
+                    result.model_label,
+                )
         blocks = []
         for i, hit in enumerate(hits, 1):
             stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(hit.timestamp))

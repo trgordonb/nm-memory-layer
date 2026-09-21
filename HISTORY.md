@@ -2,6 +2,31 @@
 
 Changelog of notable changes. Dates are implementation dates.
 
+## 2026-09-21 — Search summarizer: weak-model robustness
+
+Live run with a tiny free model (`liquid/lfm-2.5-2.6b:free`) showed two failure modes: message content arriving as a block list (previously `str()`-ed into Python-repr garbage) and the model leaking its chat template's special tokens while hallucinating tool-call syntax (`<|tool_call_start|>[summarize(...)]<|tool_call_end|>`) instead of answering.
+
+- `_content_to_text`: block-list content is properly joined to text.
+- Special tokens (`<|...|>`) are stripped from the response.
+- Pseudo tool-call payloads (`[summarize(`/`[answer(`/`[condense(`/`[search(`) are detected and treated as failure → session_search falls back to raw excerpts. No hallucinated tool-call garbage can reach the agent's context.
+- Model guidance: prefer a mid-size instruct model for the summarizer; the sanitization is a safety net, not a quality fix.
+
+## 2026-09-21 — Search summarizer: OpenRouter reasoning-budget fix
+
+First live run surfaced a real failure mode: `max_completion_tokens` on OpenRouter reasoning models (e.g. liquid/lfm-2.5-2.6b) counts reasoning tokens toward the budget — with large excerpt prompts the model returned EMPTY content with `finish_reason=length`, which the tool then misread as "nothing relevant".
+
+- `create_openrouter_summarizer` now uses `max_tokens` (verified: `finish_reason=stop` under identical prompts).
+- Empty summarizer content is no longer treated as a relevance judgment: the tool logs a warning and falls back to raw excerpts. Only the explicit "none relevant" reply produces the "no relevance" result.
+
+## 2026-09-21 — Search summarization (secondary-LLM, env-toggled)
+
+Hermes-style condensation of session_search results before they enter the agent's context, using a secondary provider (OpenRouter) separate from the agent's main model.
+
+- `SearchSummarizer` (`summarizer.py`): wraps any sync LangChain chat model; one call condenses numbered excerpts (with session/turn/role/timestamp references) to what is relevant for the query; latency and sizes logged at INFO.
+- `create_openrouter_summarizer()`: env-driven factory — `SEARCH_SUMMARIZER_ENABLED` toggle plus `OPENROUTER_API_KEY` / `OPENROUTER_MODEL` / `OPENROUTER_BASE_URL`. Returns None (feature off) when disabled or misconfigured; never raises.
+- `create_session_search_tool(store, summarizer=None)`: optional summarizer param. Enabled mode fetches extra excerpts (≥8), returns the summary with a `[session_search: condensed by <label> in <ms>ms from <n> raw excerpts]` header for A/B observability; empty summary → explicit "no relevance" result.
+- Failure semantics: summarizer crash/timeout → silent fallback to raw excerpts. `langchain-openai` added as dependency (lazy import, only when enabled).
+
 ## 2026-09-21 — Fix: cross-thread SQLite access
 
 - `SessionStore._connect` now opens the connection with `check_same_thread=False`. In the consumer agent, the first store touch can happen inside a LangGraph tool-executor thread (sync `session_search` runs in a worker pool) while `record_turn`/`close` run on the event-loop thread — the strict same-thread check raised `sqlite3.ProgrammingError` at CLI exit (and silently broke turn recording after any `session_search` call). Regression test added (worker-thread write → main-thread read/close).
