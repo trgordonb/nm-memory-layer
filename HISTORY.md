@@ -2,6 +2,13 @@
 
 Changelog of notable changes. Dates are implementation dates.
 
+## 2026-09-21 — Phase 3: Periodic nudge (agent-curated memory)
+
+- `NudgePolicy` (`nudge.py`): per-session turn counter; `should_nudge` fires every N completed turns (default 5), `mark_nudged` resets. Interval floors at 1.
+- `build_nudge_prompt`: system prompt for the internal curation LLM call — teaches the layer boundary (memory_manage for every-session knowledge, nothing for episodic detail already in the archive), shows current budget usage, and biases hard toward silence ("most turns produce NO writes").
+- `flatten_transcript`: renders recent messages (including tool calls/results) as plain text so the nudge call is provider-safe with a different toolset bound.
+- Consumer contract: call `record_turn` after every completed turn; when `should_nudge`, run the internal LLM call with only the memory tool bound (short loop, max ~3 iterations), then `mark_nudged`. Nudge writes go to prompt memory files only — never to the session archive, and take effect next session per the Phase 2 rule.
+
 ## 2026-09-21 — Phase 2: Prompt memory (always-on MEMORY.md / USER.md)
 
 - `PromptMemory` (`prompt_memory.py`): manages the MEMORY.md / USER.md pair in one directory (`$MEMORY_DIR` or `./memories`).

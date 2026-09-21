@@ -4,11 +4,12 @@ Standalone memory layer for AI agents, extracted from the `langgraph-demo` agent
 
 ## Current status
 
-**Phases 1–2 complete:**
+**Phases 1–3 complete:**
 - **Phase 1: Episodic session store (SQLite + FTS5)** — `store.py`
 - **Phase 2: Prompt memory (always-on MEMORY.md / USER.md)** — `prompt_memory.py`
+- **Phase 3: Periodic nudge (agent-curated memory)** — `nudge.py`
 
-Later phases (periodic nudge, skills, compression) land here first, then get consumed by agents.
+Later phases (skills, compression) land here first, then get consumed by agents.
 
 ## Layout
 
@@ -16,7 +17,8 @@ Later phases (periodic nudge, skills, compression) land here first, then get con
 nm_memory_layer/
 ├── __init__.py       # Public API
 ├── store.py          # SessionStore + session_search tool factory (episodic)
-└── prompt_memory.py  # PromptMemory + memory_manage tool factory (always-on)
+├── prompt_memory.py  # PromptMemory + memory_manage tool factory (always-on)
+└── nudge.py          # NudgePolicy + nudge prompt + transcript flattener (curation)
 ```
 
 ## Public API
@@ -42,6 +44,13 @@ memory = PromptMemory()
 memory.load()                           # Rendered <agent_memory> block ("" when empty) — load ONCE per session
 memory.total_chars()                    # Combined budget usage
 memory.add / replace / remove           # target: "memory" | "user"
+
+# Curation (Phase 3)
+policy = NudgePolicy(interval=5)        # fires every N completed turns
+policy.record_turn(session_id)          # call after each completed turn
+policy.should_nudge(session_id)         # -> bool; then policy.mark_nudged(session_id)
+build_nudge_prompt(chars_used, char_budget)  # system prompt for the internal LLM call
+flatten_transcript(messages)            # plain-text transcript (no tool-pairing constraints)
 ```
 
 ### Consumer responsibilities (Phase 2 contract)
@@ -58,11 +67,13 @@ memory.add / replace / remove           # target: "memory" | "user"
 - **FTS5 over vectors** — deliberate tradeoff: exact/keyword recall is cheap, local, and fast. Semantic compensation comes later from the curation layer (nudge), matching the Hermes architecture.
 - **3,575-char combined budget** — enforced on every `memory_manage` write across BOTH files; rejections return a non-fatal "Rejected:" message (consumer agent loops decide whether to retry — in langgraph-demo, tool results starting with "Error:" end the turn, so recoverable memory rejections deliberately avoid that prefix).
 - **Two-layer boundary is the agent's judgment call** — the `memory_manage` docstring teaches it: MEMORY.md/USER.md only for knowledge needed every session; everything topic-specific stays in the session archive.
+- **Nudge bias toward silence** — the nudge prompt states that most turns produce no writes and silence is valid; curation over accumulation. Nudge activity itself is never written to the session archive.
+- **Transcript flattening for the nudge** — recent turns are rendered as plain text (`flatten_transcript`) because the nudge LLM binds only the memory tool; sending original AIMessage tool_calls referencing other tools would be provider-invalid.
 
 ## Roadmap (from the Hermes implementation plan)
 
 - ~~Phase 2: Prompt memory (`MEMORY.md` / `USER.md`, 3,575-char shared budget, add/replace/remove ops)~~ ✓ 2026-09-21
-- Phase 3: Periodic nudge — agent-curated memory classification (prompt memory vs. session archive vs. nothing)
+- ~~Phase 3: Periodic nudge — agent-curated memory classification (prompt memory vs. session archive vs. nothing)~~ ✓ 2026-09-21
 - Phase 4: Skills layer — agentskills.io-style SKILL.md files, progressive disclosure, `skill_manage` with patch preference
 - Phase 5: Context compression with lineage preserved in SQLite
 
