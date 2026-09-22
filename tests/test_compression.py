@@ -91,6 +91,22 @@ class TestCompress:
         msgs = make_history(["t1", "t2", "t3"])  # no response_metadata anywhere
         assert c.compress(msgs).compressed  # falls back to chars/4 estimate
 
+    def test_over_threshold_with_too_few_turns_logs_skip_reason(self, caplog):
+        """Over-threshold usage but structurally incompressible history must say WHY
+        (user-facing observability: '24K context but no compression happened')."""
+        import logging
+
+        c = ConversationCompressor(FakeCompressorModel(), token_threshold=18000, keep_recent_turns=1)
+        msgs = make_history(["t1", "t2"])
+        msgs[-1] = AIMessage(
+            content="done",
+            response_metadata={"token_usage": {"prompt_tokens": 24831, "completion_tokens": 500}},
+        )
+        with caplog.at_level(logging.INFO, logger="nm_memory_layer.compression"):
+            res = c.compress(msgs)
+        assert not res.compressed
+        assert any("context compression skipped" in r.message and "24831" in r.message for r in caplog.records)
+
     def test_below_threshold_is_noop(self):
         c = ConversationCompressor(FakeCompressorModel(), token_threshold=10**9)
         msgs = self._long_history()

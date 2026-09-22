@@ -156,9 +156,17 @@ class ConversationCompressor:
         if not messages:
             return _noop("empty", messages)
         segments = split_into_turns(messages)
+        usage = self._current_usage(messages)
         if len(segments) < self.keep_recent_turns + 2:
+            if usage >= self.token_threshold:
+                logger.info(
+                    "context compression skipped: usage %d tokens is over the %d threshold, but the "
+                    "history has only %d turn(s) — need >= %d (first + middle + KEEP_RECENT_TURNS=%d). "
+                    "It will fire at a later turn's pre-flight.",
+                    usage, self.token_threshold, len(segments), self.keep_recent_turns + 2, self.keep_recent_turns,
+                )
             return _noop("no middle turns", messages)
-        if self._current_usage(messages) < self.token_threshold:
+        if usage < self.token_threshold:
             return _noop("below threshold", messages)
 
         segments = split_into_turns(messages)
