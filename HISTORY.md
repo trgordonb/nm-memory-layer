@@ -11,6 +11,16 @@ Investigation into `hermes-agent-self-evolution` (DSPy + GEPA, Phase 1: SKILL.md
 - Verified against the live 11-session archive (1.9 MB JSONL; tool calls, skill loads, and lineage all present).
 - Role in the stack: LangSmith remains the observability layer; `sessions.db` + exporter is the retention substrate for offline mining.
 
+## 2026-09-22 — Wiki recall layer (llm-wiki OKF knowledge base)
+
+The agent's local llm-wiki (OKF layout: concepts/, entities/, notes/, raw/ plus index.md files) becomes another memory layer.
+
+- `WikiStore` (`wiki.py`): token-overlap ranking (title hits x3) over all pages, frontmatter-stripped scoring/excerpts, `title:` frontmatter with filename fallback, index.md excluded; missing/empty wiki fully graceful.
+- `build_context(query)`: renders the `<wiki_context query=...>` block — the consumer injects it per-turn pre-flight (never archived), so recorded knowledge gets consulted even when the user doesn't mention the wiki.
+- `create_wiki_search_tool`: agent-initiated `wiki_search` (excerpts + read_file pointer + llm-wiki-okf update pointer).
+- Verified live: 3 pages recalled for a mean-reversion question; agent cited distilled rules and pulled raw/ sources.
+- Env: `WIKI_DIR` (default `./llm-wiki`).
+
 ## 2026-09-21 — Phase 5: Context compression with lineage
 
 Hermes-style pre-flight compression: when the conversation's estimated token size (~4 chars/token, no tokenizer dependency) crosses `COMPRESSION_TOKEN_THRESHOLD`, the middle turns are summarized by the secondary LLM (OpenRouter model, shared config with the summarizer) while the first turn (original task) and the most recent `COMPRESSION_KEEP_RECENT_TURNS` turns stay verbatim.

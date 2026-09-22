@@ -22,6 +22,7 @@ nm_memory_layer/
 ├── nudge.py          # NudgePolicy + nudge prompt + transcript flattener (curation)
 ├── skills.py         # SkillLibrary + skill_manage/load_skill tools (procedural)
 ├── summarizer.py     # Secondary-LLM condensation of session_search excerpts
+├── wiki.py           # WikiStore + wiki_search tool (llm-wiki OKF knowledge base)
 └── compression.py    # Pre-flight context compression with lineage
 ```
 

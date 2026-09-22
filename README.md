@@ -14,6 +14,7 @@ Initially extracted from the [langgraph-demo](../langgraph-demo) agent (branch `
 | **Procedural memory** | agentskills.io-style `SKILL.md` library with progressive disclosure (names+descriptions in context, full file on demand) | `SkillLibrary`, `create_skill_manage_tool`, `create_load_skill_tool` |
 | **Search summarization** | Secondary-LLM (OpenRouter) condensation of FTS5 excerpts before they enter context — env-toggled | `create_openrouter_summarizer` |
 | **Context compression** | Pre-flight token check; middle turns summarized with lineage stored, first + recent turns verbatim | `create_openrouter_compressor` |
+| **Wiki recall** | Local `llm-wiki` (OKF) knowledge base: pre-flight `<wiki_context>` injection + on-demand `wiki_search` | `WikiStore`, `create_wiki_search_tool` |
 | **Trace export** | One JSON line per session trajectory (tool calls, conversation projection, compression lineage) for offline mining | `SessionStore.export_to_jsonl` |
 
 ## Quick start
@@ -47,7 +48,7 @@ skills.render_index()          # -> <skills_index> names + descriptions only
 store.close()
 ```
 
-Optional features are env-toggled (default off): `SEARCH_SUMMARIZER_ENABLED=true` +
+Wiki layer reads `WIKI_DIR` (default `./llm-wiki`) when present. Optional features are env-toggled (default off): `SEARCH_SUMMARIZER_ENABLED=true` +
 `OPENROUTER_MODEL` enables search-result condensation; `COMPRESSION_ENABLED=true` +
 `COMPRESSION_TOKEN_THRESHOLD` enables pre-flight context compression. Both use
 `OPENROUTER_API_KEY` / `OPENROUTER_BASE_URL` / `OPENROUTER_MODEL` and degrade
