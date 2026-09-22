@@ -2,6 +2,15 @@
 
 Changelog of notable changes. Dates are implementation dates.
 
+## 2026-09-21 — Session trajectory exporter (offline second loop substrate)
+
+Investigation into `hermes-agent-self-evolution` (DSPy + GEPA, Phase 1: SKILL.md evolution) showed its `--eval-source sessiondb` mining expects exactly what `sessions.db` already archives: per-turn role/content transcripts with serialized tool calls, skill-usage markers, and compression lineage — while LangSmith traces are neither durable (plan-limited retention) nor turn-shaped.
+
+- `SessionStore.export_session(session_id)`: full trajectory as a dict — flat `messages` (turn/seq/role/content/tool_name/tool_call_id/parsed tool_calls/timestamp), an OpenAI-style `conversation` projection (tool_calls in `function/arguments` wire format), and the session's compression lineage.
+- `SessionStore.export_to_jsonl(path, session_ids=None)`: one trajectory per line (newest first) — the JSONL substrate datagen / the self-evolution loop consumes. Returns record count; an empty archive writes an empty file.
+- Verified against the live 11-session archive (1.9 MB JSONL; tool calls, skill loads, and lineage all present).
+- Role in the stack: LangSmith remains the observability layer; `sessions.db` + exporter is the retention substrate for offline mining.
+
 ## 2026-09-21 — Phase 5: Context compression with lineage
 
 Hermes-style pre-flight compression: when the conversation's estimated token size (~4 chars/token, no tokenizer dependency) crosses `COMPRESSION_TOKEN_THRESHOLD`, the middle turns are summarized by the secondary LLM (OpenRouter model, shared config with the summarizer) while the first turn (original task) and the most recent `COMPRESSION_KEEP_RECENT_TURNS` turns stay verbatim.

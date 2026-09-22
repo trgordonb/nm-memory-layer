@@ -77,6 +77,13 @@ if res.compressed:
     store.record_compression(session_id, res.summary, res.summarized_first_turn,
                              res.summarized_last_turn, res.original_count, res.model_label)
 store.list_compressions(session_id)           # lineage chain
+
+# Export (offline self-evolution / datagen substrate)
+out = store.export_session(session_id)        # full trajectory: messages (flat, with
+                                              # turn/seq/tool_calls), OpenAI-style
+                                              # conversation projection, compression lineage
+store.export_to_jsonl(path, session_ids=None) # one trajectory per line (newest first);
+                                              # this is what a self-evolution loop mines
 ```
 
 ### Search summarizer (env-toggled)

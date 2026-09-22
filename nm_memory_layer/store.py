@@ -320,6 +320,79 @@ class SessionStore:
             for row in rows
         ]
 
+    # -- Export (offline self-evolution / datagen substrate) -------------------
+
+    def export_session(self, session_id: str) -> dict | None:
+        """Export one full session trajectory (Hermes-SessionDB-compatible shape).
+
+        The offline second loop (e.g. hermes-agent-self-evolution's
+        ``--eval-source sessiondb``) mines exactly this: per-turn role/content
+        transcripts with serialized tool calls. Includes the compression
+        lineage when present. Returns None for unknown sessions.
+        """
+        conn = self._connect()
+        meta = conn.execute(
+            "SELECT session_id, created_at, last_turn FROM session_meta WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+        if meta is None:
+            return None
+        rows = conn.execute(
+            "SELECT turn_seq, seq, role, tool_name, tool_call_id, tool_calls, content, timestamp "
+            "FROM sessions WHERE session_id = ? ORDER BY turn_seq, seq",
+            (session_id,),
+        ).fetchall()
+        messages = []
+        for turn_seq, seq, role, tool_name, tool_call_id, tool_calls, content, timestamp in rows:
+            entry = {"turn": turn_seq, "seq": seq, "role": role, "timestamp": timestamp}
+            if tool_name:
+                entry["tool_name"] = tool_name
+            if tool_call_id:
+                entry["tool_call_id"] = tool_call_id
+            if tool_calls:
+                entry["tool_calls"] = json.loads(tool_calls)
+            entry["content"] = content
+            messages.append(entry)
+        conversation: list[dict] = []
+        for entry in messages:
+            role = "assistant" if entry["role"] == "assistant" else ("tool" if entry["role"] == "tool" else "user")
+            item = {"role": role, "content": entry["content"]}
+            if entry.get("tool_calls"):
+                item["tool_calls"] = [
+                    {"type": "function", "id": c["id"], "function": {"name": c["name"], "arguments": json.dumps(c.get("args", {}))}}
+                    for c in entry["tool_calls"]
+                ]
+            elif role == "tool":
+                item["tool_call_id"] = entry.get("tool_call_id") or ""
+                item["name"] = entry.get("tool_name") or "tool"
+            conversation.append(item)
+        return {
+            "session_id": session_id,
+            "created_at": meta[1],
+            "turns": meta[2],
+            "message_count": len(messages),
+            "messages": messages,
+            "conversation": conversation,
+            "compressions": self.list_compressions(session_id),
+        }
+
+    def export_to_jsonl(self, path: str, session_ids: list[str] | None = None) -> int:
+        """Write one JSON line per session to ``path``; returns the record count.
+
+        Pass ``session_ids`` to export specific sessions; omit to export the
+        whole archive. The JSONL substrate is what offline datagen / the
+        self-evolution loop consumes (one full trajectory per line).
+        """
+        ids = session_ids if session_ids is not None else [s["session_id"] for s in self.list_sessions()]
+        count = 0
+        with open(path, "w") as fh:
+            for session_id in ids:
+                record = self.export_session(session_id)
+                if record is not None:
+                    fh.write(json.dumps(record, default=str) + "\n")
+                    count += 1
+        return count
+
 
 def create_session_search_tool(store: SessionStore, summarizer: "SearchSummarizer | Callable[..., object] | None" = None):
     """Factory returning an agent-callable session_search tool bound to the store.
