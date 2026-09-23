@@ -21,3 +21,6 @@ packages = ["nm_memory_layer"]
 dev = [
     "pytest>=9.1.1",
 ]
+
+[project.optional-dependencies]
+wiki-hybrid = ["fastembed>=0.8.0", "sqlite-vec>=0.1.9", "numpy>=1.26"]
