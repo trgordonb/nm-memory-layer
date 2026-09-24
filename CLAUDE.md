@@ -105,7 +105,19 @@ store.export_to_jsonl(path, session_ids=None) # one trajectory per line (newest 
 - Failure semantics: model error, empty/pseudo-tool output, or too-few-turns → original history returned untouched.
 - Note: compression is in-memory per run. The archive always holds the full verbatim transcript, so after a restart/resume the history is re-evaluated and may be re-compressed (idempotent outcome, one extra LLM call).
 
-### Consumer responsibilities (Phase 2 contract)
+#### Graph hop walking
+
+`graph_hops(wiki_dir, seed_paths, max_hops, max_nodes)` reads the skill's
+`wiki/graph/graph.sqlite` (nodes / aliases / edges - typed predicates
+mentions, sourced_from, authored, summarizes_raw, works_on, depends_on)
+read-only and walks 1-2 hops outward from the hybrid hits' page nodes.
+Reached pages merge into `WikiStore.search` results with `retriever:
+"graph"` identification (via-chain + anchor page recorded); graph-only
+nodes (e.g. authors with no page) stay out of `search()` output but remain
+in raw `graph_hops` output for provenance tracing. No new deps (plain
+sqlite3, read-only). Absent graph -> no hop tags, silent skip.
+
+## Consumer responsibilities (Phase 2 contract)
 
 - Load `memory.load()` **once per session** and inject it into the system prompt — stable prefix (prompt-cache friendly) and edits take effect from the next session, per the Hermes rule.
 - Bind both tools so the agent can choose the right layer: permanent → `memory_manage`; topic-specific → `session_search`.

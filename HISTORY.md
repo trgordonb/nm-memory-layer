@@ -11,6 +11,12 @@ Investigation into `hermes-agent-self-evolution` (DSPy + GEPA, Phase 1: SKILL.md
 - Verified against the live 11-session archive (1.9 MB JSONL; tool calls, skill loads, and lineage all present).
 - Role in the stack: LangSmith remains the observability layer; `sessions.db` + exporter is the retention substrate for offline mining.
 
+## 2026-09-24 — Graph retrieval layer (typed-edge walking)
+
+- `graph_hops(wiki_dir, seed_paths, max_hops, max_nodes)` reads the skill's `wiki/graph/graph.sqlite` read-only and expands pages matched by hybrid search into their typed neighbors (`authored`, `works_on`, `depends_on`, `mentions`, `summarizes_raw`, `sourced_from`) over 1-2 hops, returning `retriever: "graph"` rows with via-chains.
+- `WikiStore.search` fuses three retrievers when the wiki's graph exists: lexical + embedding via the vector index, then graph hop expansion (path-deduped, excerpts filled from disk). Graph nodes without pages are excluded from `search()` but kept in raw `graph_hops` for provenance-aware consumers.
+- Essential for vocabulary-diverse queries: an "Artur Sepp authored works-on vol-carry" lookup reaches things section text never mentions.
+
 ## 2026-09-22 — Wiki recall layer (llm-wiki OKF knowledge base)
 
 The agent's local llm-wiki (OKF layout: concepts/, entities/, notes/, raw/ plus index.md files) becomes another memory layer.
