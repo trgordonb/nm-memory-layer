@@ -133,8 +133,8 @@ class WikiStore:
         lines = [
             f'<wiki_context query="{query[:120]}" pages="{len(hits)}">',
             "Matched pages from the local llm-wiki. Cite them as known recorded"
-            " knowledge; load a full page (e.g. read_file(llm-wiki/<path>)) before"
-            " relying on details. Update the wiki via the llm-wiki-okf skill.",
+            f" knowledge; load a full page (e.g. read_file({os.path.basename(self.wiki_dir)}/<path>))"
+            " before relying on details. Update the wiki via the llm-wiki skill.",
         ]
         for hit in hits:
             lines.append(f'\n<page path="{hit["path"]}" title="{hit["title"]}">')
@@ -166,7 +166,7 @@ def create_wiki_search_tool(wiki: WikiStore):
         blocks = []
         for hit in hits:
             blocks.append(f"--- {hit['path']} ({hit['title']}) ---\n{hit['excerpt']}")
-        return "\n\n".join(blocks) + "\n\n(Full text: read_file(llm-wiki/<path>). Update via the llm-wiki-okf skill.)"
+        return "\n\n".join(blocks) + f"\n\n(Full text: read_file({os.path.basename(wiki.wiki_dir)}/<path>). Update via the llm-wiki skill.)"
 
     return wiki_search
 
