@@ -162,9 +162,13 @@ class SessionStore:
                 if isinstance(message, ToolMessage):
                     tool_name = message.name
                     tool_call_id = message.tool_call_id
-                # Store content verbatim (no strip) so the archive is byte-faithful
-                # to what the provider saw; only skip truly empty messages.
-                if not raw_content.strip():
+                # Store content verbatim (no strip) so the archive is byte-faithful.
+                # Empty-content TOOL messages must still be recorded: parallel
+                # tool_call batches reference EVERY call id, and a dropped
+                # ToolMessage (e.g. grep with zero matches) would make the
+                # resumed history provider-invalid.
+                is_tool = role == "tool"
+                if not is_tool and not raw_content.strip():
                     continue
                 content = raw_content
                 conn.execute(
