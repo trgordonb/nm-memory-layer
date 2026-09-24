@@ -109,17 +109,42 @@ class WikiStore:
         return hits[:limit]
 
     def search(self, query: str, limit: int = 3, max_excerpt_chars: int = 1400) -> list[dict]:
-        """Hybrid when the wiki's vector cache + uplift deps are available
+        """Hybrid when the wiki's vector cache + graph deps are available
         (skill-compatible RRF fusion); otherwise the pure token-overlap
-        ranker. Falling back silently either way, then ranking is the
-        ``build_context``/``wiki_search`` contract."""
+        ranker. Falls back silently either way. After ranking, a 1-hop graph
+        walk appends structurally linked pages (retriever tag "graph")."""
         hybrid = _hybrid_search(self, query, limit)
         if hybrid is not None:
-            return hybrid[:limit]
-        hits = self._token_overlap(query, limit=limit)
-        for hit in hits:
-            hit["retrievers"] = ["lexical"]
-        return hits
+            merged = list(hybrid)
+        else:
+            overlap = self._token_overlap(query, limit=limit)
+            for hit in overlap:
+                hit["retrievers"] = ["lexical"]
+                hit["excerpt"] = hit.get("excerpt") or hit.get("snippet", "")
+            merged = overlap
+
+        # Graph walk seeded by matched pages: append structurally linked pages
+        # the text rankers could not see (e.g. authored works, depends_on
+        # companions), one hop out, path-deduped, excerpts filled from disk.
+        if _graph_available(self.wiki_dir):
+            seed_paths = []
+            for hit in merged:
+                if hit["path"] not in seed_paths:
+                    seed_paths.append(hit["path"])
+            existing_paths = {h["path"] for h in merged}
+            for neighbor in graph_hops(self.wiki_dir, seed_paths, max_hops=1):
+                if neighbor["path"] in existing_paths:
+                    continue
+                existing_paths.add(neighbor["path"])
+                text = next((t for p, t in self._pages() if p == neighbor["path"]), "")
+                if not neighbor["path"]:
+                    continue  # graph-only nodes carry no page to cite
+                neighbor["excerpt"] = text[:1400]
+                neighbor["title"] = neighbor["title"] or neighbor["path"]
+                neighbor["score"] = round(0.02 + 0.001 * len(merged), 4)
+                merged.append(neighbor)
+
+        return merged[: max(limit, 8)]
 
     def available(self) -> bool:
         return bool(self._pages())
@@ -132,7 +157,7 @@ class WikiStore:
         import time
         lines = [
             f'<wiki_context query="{query[:120]}" pages="{len(hits)}">',
-            "Matched pages from the local llm-wiki. Cite them as known recorded"
+            "Matched pages from the local llm-wiki (graph-walked neighbors tagged as such). Cite them as known recorded"
             f" knowledge; load a full page (e.g. read_file({os.path.basename(self.wiki_dir)}/<path>))"
             " before relying on details. Update the wiki via the llm-wiki skill.",
         ]
@@ -378,3 +403,109 @@ def _load_hybrid_backend():
         logging.warning("wiki hybrid search: fastembed unavailable (%s)", exc)
         return None
     return model, sqlite_vec
+
+
+# ── Graph hop walking (wiki/graph/graph.sqlite) ──────────────────────────────
+#
+# The llm-wiki skill maintains a typed knowledge graph (nodes/aliases/edges).
+# Search surfaces TEXT matches; the graph answers a complementary question —
+# which recorded nodes are structurally linked to what matched. A 1-2 hop walk
+# from a hybrid hit's page node (authored / works_on / depends_on /
+# mentions / summarised) surfaces neighbors the embeddings cannot see:
+# e.g. "Artur Sepp" → authored → their works → mentions → concepts.
+
+GRAPH_PREDICATE_ORDER = [
+    "authored", "works_on", "depends_on", "summarizes_raw", "sourced_from",
+    "mentions",
+]
+
+
+def _graph_available(wiki_dir: str) -> bool:
+    return os.path.isfile(os.path.join(wiki_dir, "graph", "graph.sqlite"))
+
+
+def _graph_store(wiki_dir: str):
+    """Read-only connection to the wiki graph (None when absent)."""
+    import sqlite3
+
+    if not _graph_available(wiki_dir):
+        return None
+    try:
+        conn = sqlite3.connect(f"file:{os.path.join(wiki_dir, 'graph', 'graph.sqlite')}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        return conn
+    except Exception as exc:
+        logging.warning("wiki graph: connection failed (%s)", exc)
+        return None
+
+
+def _locator_to_path(locator: str) -> str:
+    """Locator '<rel_path>\\x1f<idx>' -> page rel_path (pre-flight key form)."""
+    return locator.split("\x1f", 1)[0]
+
+
+def graph_hops(wiki_dir: str, seed_paths: list[str], max_hops: int = 1,
+               max_nodes: int = 6) -> list[dict]:
+    """Walk the wiki graph 1..2 hops outward from pages that matched a query.
+
+    Seeds are page relative paths (the hybrid hits). Returns one row per
+    REACHED page/node: {node_id, title, page_type, path, edge_chain}, ranked by
+    predicate weight. Graph-absent -> [].
+    """
+    conn = _graph_store(wiki_dir)
+    if conn is None or not seed_paths:
+        return []
+    try:
+        seed_by_path: dict[str, str] = {}
+        for row in conn.execute("SELECT id, path FROM nodes"):
+            seed_by_path.setdefault(row["path"], row["id"])
+
+        visited_nodes: set[str] = set()
+        results: list[dict] = []
+        frontier_paths = seed_paths
+        for hop in range(max_hops):
+            next_frontier: list[str] = []
+            for page_path in frontier_paths:
+                node_id = seed_by_path.get(page_path) or f"page:{page_path}"
+                if node_id in visited_nodes:
+                    continue
+                visited_nodes.add(node_id)
+                # outgoing + incoming edges of this node's DIRECT subject/object
+                edges = conn.execute(
+                    """SELECT e.predicate, e.subject, e.object, e.confidence,
+                              e.extraction_method, e.page
+                       FROM edges e
+                       WHERE e.subject = ? OR e.object = ?""",
+                    (node_id, node_id),
+                ).fetchall()
+                for edge in edges:
+                    for endpoint in (edge["subject"], edge["object"]):
+                        if endpoint == node_id or endpoint in visited_nodes:
+                            continue
+                        node = conn.execute(
+                            "SELECT id, slug, title, page_type, path FROM nodes WHERE id = ?",
+                            (endpoint,),
+                        ).fetchone()
+                        if not node:
+                            continue  # aliases/raw nodes may have no page
+                        if hop == 0 and not edge["predicate"]:
+                            continue
+                        results.append({
+                            "path": node["path"],
+                            "title": node["title"] or node["slug"],
+                            "excerpt": None,  # filled by caller from the page text
+                            "score": 0.0,
+                            "retrievers": ["graph"],
+                            "hop": hop + 1,
+                            "via": f"{edge['predicate']} ({edge['extraction_method']}) from",
+                            "anchor": page_path,
+                        })
+                        next_frontier.append(node["path"])
+            frontier_paths = next_frontier
+        conn.close()
+        return results
+    except Exception as exc:
+        import logging
+        logging.warning("wiki graph walk failed (%s) — skipping", exc)
+        return []
+
