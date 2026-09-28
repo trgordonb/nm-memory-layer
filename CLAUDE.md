@@ -143,7 +143,24 @@ sqlite3, read-only). Absent graph -> no hop tags, silent skip.
 - ~~Phase 2: Prompt memory (`MEMORY.md` / `USER.md`, 3,575-char shared budget, add/replace/remove ops)~~ ✓ 2026-09-21
 - ~~Phase 3: Periodic nudge — agent-curated memory classification (prompt memory vs. session archive vs. nothing)~~ ✓ 2026-09-21
 - ~~Phase 4: Skills layer — agentskills.io-style SKILL.md files, progressive disclosure, `skill_manage` with patch preference~~ ✓ 2026-09-21
-- Phase 5: Context compression with lineage preserved in SQLite
+- ~~Phase 5: Context compression with lineage preserved in SQLite~~ ✓ 2026-09-21
+
+## Next-increment roadmap (Hindsight-inspired; owned by the consumer, priorities are binding order)
+
+Comparison study: vectorize-io/hindsight (Postgres+pgvector **server** product; Retain/Recall/Reflect over World facts / Experiences / Observations; Mental Models; entity graph; TEMPR = semantic+keyword+graph+temporal with RRF; disposition traits; LongMemEval SOTA). Our stack deliberately stays local-first SQLite — the plan adopts its ideas, not its infra.
+
+**Priority 2 — Hybrid session vector recall** (`store.py` upgrade) — build first
+   Embed turn sections (skill-parity BAAI/bge-small-en-v1.5, 384d, sqlite-vec `vec0`) alongside the FTS5 index; fuse keyword + semantic via the existing RRF (k=60) path from `wiki.py`, with a `semantic` retrievers-values tag on the hit objects so consumers can A/B. Zero new deps — fastembed + sqlite-vec are already required. Scale is trivial: 1,694 messages × 384 floats ≈ 2.6 MB. Must not regress byte-fidelity/regression tests (empty ToolMessages, pairing).
+
+**Priority 3 — Temporal recall on the session archive** (`store.search`) — second
+   `timestamp` already exists on every row. Add date-range predicates + a natural-language "last week / since 2026-09-01" parser that maps human time phrases to epoch bounds and filters recall accordingly — direct payoff for finance queries. Extend the created-at UI so consumers can pass `since=` / `until=` to `session_search`.
+
+**Priority 1 — Offline consolidation loop (the reflect/mental-model gap) — largest structural addition, executed last in the user's binding order. An idle-time (cron or next-session-stale-flag) reflect pass runs over the last N turns mined from `sessions.db` (`export_to_jsonl`) and produces:
+   - distilled `synthesis/` concept pages + typed `graph.relationships` edges (topics/formats/tools patterned from the nudge's memory-classifier), and
+   - a returnable operation log entry `wiki/log.md` `## [...] reflect` for provenance.
+   Emulates Hindsight's "Mental Models" — but rather than shipping a parallel store, ours writes directly into the wiki skill's pages and the typed graph, reachable via `wiki_search` and `wiki_graph_query.py` without consumer changes.
+
+Deferred-by-design (do not build): serving surface (HTTP/MCP/UI), Postgres/pgvector, disposition traits, Hindsight's coding-agent installer — all contradict the local-first, in-process single-consumer philosophy.
 
 ## Dev
 

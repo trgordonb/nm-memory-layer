@@ -17,6 +17,16 @@ Initially extracted from the [langgraph-demo](../langgraph-demo) agent (branch `
 | **Wiki recall** | Local `llm-wiki` (OKF) knowledge base: pre-flight `<wiki_context>` injection + on-demand `wiki_search` | `WikiStore`, `create_wiki_search_tool` |
 | **Trace export** | One JSON line per session trajectory (tool calls, conversation projection, compression lineage) for offline mining | `SessionStore.export_to_jsonl` |
 
+## Roadmap
+
+Next-increment roadmap (post-Hindsight comparison study; user's numbering, executed in the written order):
+
+2. (build first) **Hybrid session vector recall** - embed turn sections (bge-small 384d, sqlite-vec) alongside FTS5; fuse keyword+semantic via RRF k=60 (mirrors the wiki layer).
+3. **Temporal recall** - user date predicates (since=/until=) + NL time-phrase parser for 'last week'-style queries over the session archive.
+1. **Offline reflect-mode consolidation** - background pass that reflects across the last N archived sessions and writes synthesis pages + typed graph edges (Hindsight Mental-Models gap), reachable via `wiki_search` / `wiki_graph_query.py`.
+
+Details and deferred-by-design notes: `CLAUDE.md`.
+
 ## Quick start
 
 ```python

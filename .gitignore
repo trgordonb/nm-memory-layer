@@ -12,3 +12,4 @@ wheels/
 # Local session databases created during testing
 sessions.db
 sessions.db-*
+scripts/__pycache__/
