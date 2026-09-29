@@ -385,8 +385,13 @@ def _load_hybrid_backend():
 
     Same model name and cache dir (FASTEMBED_CACHE_PATH, default
     ~/.cache/llm-wiki/fastembed) so the memory layer shares the wiki
-    tooling's on-disk model without double downloads.
+    tooling's on-disk model without double downloads. The loaded backend is
+    cached module-wide (its TextEmbedding init is expensive); all hybrid
+    consumers (wiki search, session vector recall) share the one instance.
     """
+    global _HYBRID_BACKEND
+    if _HYBRID_BACKEND is not None:
+        return _HYBRID_BACKEND
     try:
         import sqlite_vec
         from fastembed import TextEmbedding
@@ -402,7 +407,14 @@ def _load_hybrid_backend():
     except Exception as exc:
         logging.warning("wiki hybrid search: fastembed unavailable (%s)", exc)
         return None
-    return model, sqlite_vec
+    _HYBRID_BACKEND = (model, sqlite_vec)
+    return _HYBRID_BACKEND
+
+
+# Module-level cached backend: one shared TextEmbedding instance per process
+# (its ONNX init is expensive); wiki search + session vector recall share it.
+_HYBRID_BACKEND = None
+_MAX_COSINE_DISTANCE = 0.35  # module ref for external consumers (store.py)
 
 
 # ── Graph hop walking (wiki/graph/graph.sqlite) ──────────────────────────────

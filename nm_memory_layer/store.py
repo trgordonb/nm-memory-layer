@@ -19,6 +19,10 @@ from dataclasses import dataclass
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
 
+# Retrieval fusion constants — keep number-parity with wiki.py (skill)
+MAX_COSINE_DISTANCE = 0.35
+RRF_K = 60
+
 
 def _default_db_path() -> str:
     """DB lives in the consumer's working directory unless overridden."""
@@ -32,6 +36,7 @@ class SessionSearchHit:
     role: str
     snippet: str
     timestamp: float
+    retrievers: list[str] | None = None  # ["lexical"] / ["lexical", "embedding"] on hybrid hits
 
 
 class SessionStore:
@@ -40,6 +45,7 @@ class SessionStore:
     def __init__(self, db_path: str | None = None):
         self.db_path = db_path or _default_db_path()
         self._conn: sqlite3.Connection | None = None
+        self._vec_ready: bool | None = None  # None = not probed yet
 
     def _connect(self) -> sqlite3.Connection:
         if self._conn is None:
@@ -98,9 +104,39 @@ class SessionStore:
                 model TEXT,
                 created_at REAL NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS store_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
             """
         )
         conn.commit()
+        # Optional vector extension: only when sqlite-vec loads. A store opened
+        # without the hybrid deps stays fully functional via FTS5 (lexical).
+        if self._vec_ready is None:
+            self._vec_ready = self._try_init_vectors(conn)
+
+    def _try_init_vectors(self, conn: sqlite3.Connection) -> bool:
+        """Load sqlite-vec and create the KNN structures; returns readiness."""
+        import logging as _l
+        try:
+            conn.enable_load_extension(True)
+            import sqlite_vec
+            sqlite_vec.load(conn)
+            conn.enable_load_extension(False)
+            conn.executescript(
+                """
+                CREATE VIRTUAL TABLE IF NOT EXISTS session_vec USING vec0(
+                    embedding float[384] distance_metric=cosine
+                );
+                """
+            )
+        except Exception as exc:
+            import logging
+            logging.info("session vector recall unavailable (%s) — FTS5-only search", str(exc)[:120])
+            return False
+        return True
 
     def close(self) -> None:
         if self._conn is not None:
@@ -231,10 +267,19 @@ class SessionStore:
         return str(uuid.uuid4())
 
     def search(self, query: str, limit: int = 5, session_id: str | None = None) -> list[SessionSearchHit]:
-        """FTS5 search across all archived sessions, newest first.
+        """Hybrid search over the archive: FTS5 keyword ranks + sqlite-vec KNN
+        over message embeddings, fused with reciprocal-rank fusion (k=60) —
+        the same TEMPR-style ranking the wiki layer uses.
+
+        Falls back to pure lexical (FTS5, AND → OR → LIKE) in any of these
+        cases: vector extension unavailable, no embeddings backfilled yet,
+        query embed failure, or embed services unreachable
+        (`fastembed` + `sqlite-vec` are the optional `wiki-hybrid` extras).
 
         Falls back to LIKE matching when the query is not valid FTS5 syntax
-        (e.g. bare quotes or dangling operators).
+        (e.g. bare quotes or dangling operators). Every hit carries a
+        ``retrievers`` field ["lexical"] / ["lexical", "embedding"] so callers
+        can A/B the ranking strategies.
         """
         conn = self._connect()
         if session_id:
@@ -255,6 +300,7 @@ class SessionStore:
                 [match_param, *scope_params, limit],
             ).fetchall()
 
+        lexical_ranked = []  # [(session_id, turn_seq, seq, role, content, timestamp)]
         try:
             rows = _rows("sessions_fts MATCH ?", query)
             if not rows and len(query.split()) > 1:
@@ -263,16 +309,186 @@ class SessionStore:
                 rows = _rows("sessions_fts MATCH ?", " OR ".join(query.split()))
         except sqlite3.OperationalError:
             rows = _rows("f.content LIKE ?", f"%{query}%")
+        if rows:
+            lexical_ranked = list(rows)
+
+        # ── semantic channel (vec0 KNN) ────────────────────────────────────
+        semantic_ranked: list[tuple] = []
+        if self._vec_ready:
+            self.backfill_vectors()
+            nn = self._knn(query, session_id=session_id, k=50)
+            if nn:
+                # pull full rows for the KNN hit ids, distance-ordered
+                id_filtered = []
+                for r_id, distance in nn:
+                    if distance > MAX_COSINE_DISTANCE:
+                        break
+                    id_filtered.append(r_id)
+                if id_filtered:
+                    marks = ",".join("?" for _ in id_filtered)
+                    by_rowid = {
+                        r[0]: (r[1], r[2], r[4], r[5], r[6])  # (sid, turn, role, content, ts)
+                        for r in conn.execute(
+                            "SELECT rowid, session_id, turn_seq, seq, role, content, timestamp "
+                            f"FROM sessions WHERE rowid IN ({marks})",
+                            id_filtered,
+                        ).fetchall()
+                    }
+                    # preserve the distance-ordered KNN ranking (skill-parity:
+                    # RRF ranks derive from vector distance, not timestamps)
+                    semantic_ranked = [
+                        (by_rowid[r_id][0], by_rowid[r_id][1], by_rowid[r_id][2], by_rowid[r_id][3], by_rowid[r_id][4])
+                        for r_id in id_filtered if r_id in by_rowid
+                    ]
+
+        # ── RRF fusion (k=60, skill-parity) ────────────────────────────────
+        if not semantic_ranked:
+            return [
+                SessionSearchHit(
+                    session_id=r[0], turn_seq=r[1], role=r[2],
+                    snippet=r[3][:600], timestamp=r[4], retrievers=["lexical"],
+                )
+                for r in lexical_ranked
+            ]
+        if not lexical_ranked:
+            return [
+                SessionSearchHit(
+                    session_id=r[0], turn_seq=r[1], role=r[2],
+                    snippet=r[3][:600], timestamp=r[4], retrievers=["embedding"],
+                )
+                for r in semantic_ranked
+            ]
+
+        lexical_ranks = {
+            (r[0], r[1], r[2]): rank for rank, r in enumerate(lexical_ranked, 1)
+        }
+        semantic_ranks = {
+            (r[0], r[1], r[2]): rank for rank, r in enumerate(semantic_ranked, 1)
+        }
+        candidate_order = list(lexical_ranked) + [r for r in semantic_ranked if (r[0], r[1], r[2]) not in lexical_ranks]
+        fused = []
+        seen = set()
+        for r in candidate_order:
+            key = (r[0], r[1], r[2])
+            if key in seen:
+                continue
+            seen.add(key)
+            score = 0.0
+            retrievers = []
+            if key in lexical_ranks:
+                score += 1.0 / (RRF_K + lexical_ranks[key])
+                retrievers.append("lexical")
+            if key in semantic_ranks:
+                score += 1.0 / (RRF_K + semantic_ranks[key])
+                retrievers.append("embedding")
+            fused.append((score, key, retrievers, r))
+        fused.sort(key=lambda item: -item[0])
         return [
             SessionSearchHit(
-                session_id=row[0],
-                turn_seq=row[1],
-                role=row[2],
-                snippet=row[3][:600],
-                timestamp=row[4],
+                session_id=r[0], turn_seq=r[1], role=r[2],
+                snippet=r[3][:600], timestamp=r[4], retrievers=retrievers,
             )
-            for row in rows
+            for _, key, retrievers, r in fused[:limit]
         ]
+
+    # ── Hybrid vector recall (priority 2; skill-parity TEMPR-style adds) ──
+
+    def _vec_state(self, key: str, default: str | None = None) -> str | None:
+        conn = self._connect()
+        if not self._vec_ready:
+            return default
+        row = conn.execute("SELECT value FROM store_meta WHERE key = ?", (key,)).fetchone()
+        return row[0] if row else default
+
+    def _vec_set_state(self, key: str, value: str) -> None:
+        conn = self._connect()
+        if not self._vec_ready:
+            return
+        with conn:
+            conn.execute(
+                "INSERT INTO store_meta (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+
+    def backfill_vectors(self, max_rows: int = 300) -> int:
+        """Embed archive messages not yet in session_vec (idempotent, bounded).
+
+        Called opportunistically at the start of `search()`. Returns the
+        number of messages embedded this call. Silent no-op when the hybrid
+        backend is unavailable (fastembed + sqlite-vec not installed) or the
+        vector schema failed to migrate.
+
+        Incremental: `store_meta.vec_last_rowid` tracks the highest archived
+        rowid already embedded; only newer rows are embedded per call. Rows
+        with empty content (e.g. zero-match greps) are skipped but still
+        advance the watermark.
+        """
+        if not self._vec_ready:
+            return 0
+        from .wiki import _load_hybrid_backend  # lazy: avoids store->wiki->summarizer cycle
+        backend = _load_hybrid_backend()
+        if backend is None:
+            return 0
+        model, sqlite_vec = backend
+
+        conn = self._connect()
+        try:
+            vec_row = self._vec_state("vec_last_rowid") or 0
+            rows = conn.execute(
+                "SELECT rowid, session_id, turn_seq, seq, content FROM sessions "
+                "WHERE rowid > ? AND role IN ('user', 'assistant', 'tool') "
+                "ORDER BY rowid LIMIT ?",
+                (int(vec_row), max_rows),
+            ).fetchall()
+            trunc = [r[4][:4000] for r in rows]
+
+            incremental = [list(map(float, vec)) for vec in model.passage_embed(trunc)]
+            incremental = incremental[:len(rows)]
+        except Exception as exc:
+            logging.warning("session vector backfill failed (%s) — lexical only", str(exc)[:150])
+            return 0
+
+        with conn:
+            counter = 0
+            for (rowid, _sid, _turn, _seq, _content), vector in zip(rows, incremental):
+                conn.execute(
+                    "INSERT OR REPLACE INTO session_vec(rowid, embedding) VALUES (?, ?)",
+                    (row_id_lit := int(rowid), sqlite_vec.serialize_float32(vector)),
+                )
+                counter += 1
+            last = rows[-1][0] if rows else int(vec_row)
+            self._vec_set_state("vec_last_rowid", str(max(int(last), int(vec_row))))
+        logging.info("session vector backfill: %d rows embedded (of %d scanned)", counter, len(rows))
+        return counter
+
+    def _knn(self, query: str, session_id: str | None = None, k: int = 50):
+        """KNN over embedded messages: [(rowid, distance)], distance ascending."""
+        if not self._vec_ready:
+            return []
+        backend = None
+        try:
+            from .wiki import _load_hybrid_backend
+            backend = _load_hybrid_backend()
+        except Exception:
+            backend = None
+        if backend is None:
+            return []
+        model, sqlite_vec = backend
+        conn = self._connect()
+        try:
+            conn.enable_load_extension(True)
+            sqlite_vec.load(conn)
+            conn.enable_load_extension(False)
+            query_vector = next(model.query_embed([query]))
+            query_blob = sqlite_vec.serialize_float32(query_vector)
+            return conn.execute(
+                "SELECT rowid, distance FROM session_vec WHERE embedding MATCH ? AND k = ? ORDER BY distance",
+                (query_blob, k),
+            ).fetchall()
+        except Exception as exc:
+            logging.warning("session_vec KNN failed (%s) — lexical only", str(exc)[:150])
+            return []
 
     def record_compression(
         self,
