@@ -22,7 +22,7 @@ Initially extracted from the [langgraph-demo](../langgraph-demo) agent (branch `
 Next-increment roadmap (post-Hindsight comparison study; user's numbering, executed in the written order):
 
 2. (build first) **Hybrid session vector recall** - embed turn sections (bge-small 384d, sqlite-vec) alongside FTS5; fuse keyword+semantic via RRF k=60 (mirrors the wiki layer).
-3. **Temporal recall** - user date predicates (since=/until=) + NL time-phrase parser for 'last week'-style queries over the session archive.
+3. ~~**Temporal recall**~~ ✅ 2026-09-25 - user date predicates (since=/until=) + NL time-phrase parser for 'last week'-style queries over the session archive.
 1. **Offline reflect-mode consolidation** - background pass that reflects across the last N archived sessions and writes synthesis pages + typed graph edges (Hindsight Mental-Models gap), reachable via `wiki_search` / `wiki_graph_query.py`.
 
 Details and deferred-by-design notes: `CLAUDE.md`.

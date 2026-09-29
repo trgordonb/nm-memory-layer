@@ -266,7 +266,8 @@ class SessionStore:
     def new_session_id(self) -> str:
         return str(uuid.uuid4())
 
-    def search(self, query: str, limit: int = 5, session_id: str | None = None) -> list[SessionSearchHit]:
+    def search(self, query: str, limit: int = 5, session_id: str | None = None,
+               since: float | None = None, until: float | None = None) -> list[SessionSearchHit]:
         """Hybrid search over the archive: FTS5 keyword ranks + sqlite-vec KNN
         over message embeddings, fused with reciprocal-rank fusion (k=60) —
         the same TEMPR-style ranking the wiki layer uses.
@@ -280,6 +281,8 @@ class SessionStore:
         (e.g. bare quotes or dangling operators). Every hit carries a
         ``retrievers`` field ["lexical"] / ["lexical", "embedding"] so callers
         can A/B the ranking strategies.
+
+        ``since`` / ``until`` bound the ``timestamp`` column (epoch seconds) across BOTH channels — a date filter narrows the KNN candidate set before fusion, so hybrid recall stays honest under a time range. Parse natural-language phrases with :func:`nm_memory_layer.temporal.parse_time_range`.
         """
         conn = self._connect()
         if session_id:
@@ -289,13 +292,22 @@ class SessionStore:
             scope = ""
             scope_params = []
 
+        bounds = []  # (sql, param) pairs appended to scope_params below
+        if since is not None:
+            bounds.append("s.timestamp >= ?")
+            scope_params.append(since)
+        if until is not None:
+            bounds.append("s.timestamp <= ?")
+            scope_params.append(until)
+
         def _rows(match_sql: str, match_param: str) -> list[tuple]:
             return conn.execute(
                 "SELECT s.session_id, s.turn_seq, s.role, s.content, s.timestamp "
                 "FROM sessions_fts f JOIN sessions s ON "
                 "s.session_id = f.session_id AND s.turn_seq = f.turn_seq AND s.seq = f.seq "
-                f"WHERE ({match_sql}) {scope} "
-                "ORDER BY s.timestamp DESC, s.turn_seq DESC, s.seq "
+                f"WHERE ({match_sql}) {scope}"
+                + ("".join(f" AND {b}" for b in bounds) if bounds else "")
+                + " ORDER BY s.timestamp DESC, s.turn_seq DESC, s.seq "
                 "LIMIT ?",
                 [match_param, *scope_params, limit],
             ).fetchall()
@@ -339,6 +351,8 @@ class SessionStore:
                     semantic_ranked = [
                         (by_rowid[r_id][0], by_rowid[r_id][1], by_rowid[r_id][2], by_rowid[r_id][3], by_rowid[r_id][4])
                         for r_id in id_filtered if r_id in by_rowid
+                        and (since is None or by_rowid[r_id][4] >= since)
+                        and (until is None or by_rowid[r_id][4] <= until)
                     ]
 
         # ── RRF fusion (k=60, skill-parity) ────────────────────────────────
@@ -624,23 +638,59 @@ def create_session_search_tool(store: SessionStore, summarizer: "SearchSummarize
     """
 
     @tool
-    def session_search(query: str, limit: int = 5) -> str:
+    def session_search(query: str, limit: int = 5, since: str = "", until: str = "",
+                       time_range: str = "") -> str:
         """Search past session transcripts (episodic memory) for context relevant
         to the current task. Use when past conversations may contain decisions,
         findings, or procedures that help now. Returns matching excerpts with
         session id, turn number, and role — NOT full transcripts.
 
         Args:
-            query: keywords or phrases to search for (supports FTS5 query syntax).
+            query: keywords or phrases to search for (supports natural language
+                — the recall fuses keyword and vector semantic ranking).
             limit: maximum number of excerpts to return (default 5).
+            since: ISO date "YYYY-MM-DD" to bound from (inclusive).
+            until: ISO date "YYYY-MM-DD" to bound to (inclusive).
+            time_range: natural-language window instead of since/until —
+                "today", "yesterday", "last week", "past 10 days",
+                "last month", "since 2026-09-01", "in September 2026",
+                "between 2026-09-01 and 2026-09-20".
         """
         if not query.strip():
             return "Error: empty query"
+
+        bounds_start: float | None = None
+        bounds_end: float | None = None
+        if time_range.strip():
+            from .temporal import parse_time_range
+            parsed = parse_time_range(time_range)
+            if parsed is None:
+                return (
+                    f"Rejected: could not interpret time_range {time_range!r} — "
+                    "try 'last week', 'past 10 days', 'since 2026-09-01' or ISO dates."
+                )
+            bounds_start, bounds_end = parsed
+        if since.strip():
+            from .temporal import _iso_date, _start_of_day
+            dtv = _iso_date(since)
+            if dtv is None:
+                return f"Rejected: could not parse since {since!r} as YYYY-MM-DD"
+            bounds_start = max(bounds_start or float("-inf"), _start_of_day(dtv).timestamp())
+        if until.strip():
+            from .temporal import _end_of_day, _iso_date
+            dtv = _iso_date(until)
+            if dtv is None:
+                return f"Rejected: could not parse until {until!r} as YYYY-MM-DD"
+            bounds_end = min(bounds_end if bounds_end is not None else float("inf"), _end_of_day(dtv).timestamp())
+
         # With a summarizer, fetch extra material for it to condense.
         search_limit = max(limit, 8) if summarizer is not None else max(1, min(limit, 20))
-        hits = store.search(query, limit=search_limit)
+        hits = store.search(query, limit=search_limit, since=bounds_start, until=bounds_end)
         if not hits:
-            return "No past session matches found."
+            no_match = ("No past session matches in this time range."
+                        if (bounds_start is not None or bounds_end is not None)
+                        else "No past session matches found.")
+            return no_match
         if summarizer is not None:
             try:
                 result = summarizer.summarize(query, hits)
