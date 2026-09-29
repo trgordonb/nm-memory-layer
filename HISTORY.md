@@ -11,6 +11,13 @@ Investigation into `hermes-agent-self-evolution` (DSPy + GEPA, Phase 1: SKILL.md
 - Verified against the live 11-session archive (1.9 MB JSONL; tool calls, skill loads, and lineage all present).
 - Role in the stack: LangSmith remains the observability layer; `sessions.db` + exporter is the retention substrate for offline mining.
 
+## 2026-09-25 — Priority 3: Temporal recall on the session archive
+
+- `parse_time_range` (`temporal.py`): NL time phrases -> epoch bounds; stdlib datetime only; injectable `now=` for deterministic tests.
+- `SessionStore.search(..., since, until)`: bounds BOTH recall channels (FTS5 rows + vec0 KNN rows narrowed before RRF fusion so hybrid recall stays honest under a range).
+- `session_search` tool: `time_range=` phrase + explicit `since=`/`until=` ISO args; invalid phrases/dates are non-fatal "Rejected:" (consistent with the memory_tools layer; turns only end on "Error:").
+- 14 new tests (139 total): parser boundaries (Monday-anchored weeks, N-day windows, calendar months, end-of-day clamp) + time-bounded search across both channels.
+
 ## 2026-09-24 — Graph retrieval layer (typed-edge walking)
 
 - `graph_hops(wiki_dir, seed_paths, max_hops, max_nodes)` reads the skill's `wiki/graph/graph.sqlite` read-only and expands pages matched by hybrid search into their typed neighbors (`authored`, `works_on`, `depends_on`, `mentions`, `summarizes_raw`, `sourced_from`) over 1-2 hops, returning `retriever: "graph"` rows with via-chains.
