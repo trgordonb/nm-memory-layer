@@ -7,8 +7,12 @@ requires-python = ">=3.11"
 dependencies = [
     "langchain-core>=1.0.0",
     "langchain-openai>=1.6.2",
+    "nm-skills-registry",
     "pyyaml>=6.0.3",
 ]
+
+[tool.uv.sources]
+nm-skills-registry = { git = "https://github.com/trgordonb/nm-skills-registry", branch = "main" }
 
 [build-system]
 requires = ["hatchling"]

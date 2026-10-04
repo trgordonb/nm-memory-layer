@@ -8,7 +8,7 @@ Standalone memory layer for AI agents, extracted from the `langgraph-demo` agent
 - **Phase 1: Episodic session store (SQLite + FTS5)** — `store.py`
 - **Phase 2: Prompt memory (always-on MEMORY.md / USER.md)** — `prompt_memory.py`
 - **Phase 3: Periodic nudge (agent-curated memory)** — `nudge.py`
-- **Phase 4: Skills (procedural memory, progressive disclosure)** — `skills.py`
+- **Phase 4: Skills (procedural memory, progressive disclosure)** — `skills.py` — since 2026-10-04, `SkillLibrary` is a facade over `nm-skills-registry` (sibling repo): local dir by default, S3-compatible registry + per-user enable/disable when `SKILLS_REGISTRY` is set (Hermes-style toggles, `skill_manage enable|disable`). Local `skills/` dir stays the materialized working copy either way; behavior pinned by parity tests in both repos.
 - **Search summarization (secondary-LLM condensation of FTS5 excerpts)** — `summarizer.py`
 - **Phase 5: Context compression with lineage** — `compression.py`
 

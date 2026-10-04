@@ -19,9 +19,17 @@ SKILL.md enters context only when the agent decides it is relevant
 
 The agent curates the library itself through the ``skill_manage`` tool. Its
 actions mirror the Hermes toolset — create, patch, edit, delete, write_file,
-remove_file — with ``patch`` as the preferred update path: a targeted
-string replacement is both safer (no risk of breaking working content) and
-more token-efficient than a full rewrite.
+remove_file, enable, disable — with ``patch`` as the preferred update path: a
+targeted string replacement is both safer (no risk of breaking working
+content) and more token-efficient than a full rewrite.
+
+Since 0.2, all storage goes through ``nm-skills-registry`` (SkillRegistry):
+a local directory by default, or an S3-compatible registry with per-user
+enable/disable when ``SKILLS_REGISTRY`` is set (e.g.
+``SKILLS_REGISTRY=s3://bucket`` + R2/AWS credentials). The local ``skills/``
+directory stays the materialized working copy either way, so skill scripts
+keep running from real paths. ``SkillLibrary`` is now a thin facade over the
+registry; behavior is pinned by parity tests on both sides.
 
 Skill-creation triggers (evaluated by the periodic nudge): a turn with many
 tool calls, recovery from an error, a user correction, or a non-obvious
@@ -30,165 +38,91 @@ workflow that worked.
 
 import os
 import re
-import shutil
 from pathlib import Path
 from typing import Literal
 
-import yaml
 from langchain_core.tools import tool
+
+from nm_skills_registry import SkillRegistry, registry_from_env
 
 _SKILL_FILE = "SKILL.md"
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 
-def _parse_frontmatter(text: str) -> tuple[dict, str]:
-    """Split a SKILL.md into (frontmatter dict, body). Missing/malformed frontmatter -> ({}, full text)."""
-    if not text.startswith("---"):
-        return {}, text
-    parts = text.split("---", 2)
-    if len(parts) < 3:
-        return {}, text
-    try:
-        meta = yaml.safe_load(parts[1])
-    except yaml.YAMLError:
-        return {}, parts[2].lstrip("\n")
-    return (meta if isinstance(meta, dict) else {}), parts[2].lstrip("\n")
-
-
 class SkillLibrary:
-    """Manages a directory of agentskills.io-style skills."""
+    """Manages a directory of agentskills.io-style skills.
 
-    def __init__(self, skills_dir: str | None = None):
+    A facade over :class:`nm_skills_registry.SkillRegistry`. With
+    ``SKILLS_REGISTRY`` unset the registry is a plain local directory (the
+    historical behavior); with it set, skills live in S3-compatible storage
+    with the local directory as a write-through mirror.
+    """
+
+    def __init__(self, skills_dir: str | None = None, registry: SkillRegistry | None = None):
         self.skills_dir = Path(skills_dir or os.getenv("SKILLS_DIR", "skills"))
+        self._registry = registry or registry_from_env(self.skills_dir)
+
+    @property
+    def registry(self) -> SkillRegistry:
+        """The underlying SkillRegistry (for admin surfaces: list_all, set_enabled)."""
+        return self._registry
 
     # -- resolution ---------------------------------------------------------
 
     def _all_skill_files(self) -> list[Path]:
-        if not self.skills_dir.exists():
-            return []
-        return sorted(self.skills_dir.rglob(_SKILL_FILE))
-
-    def _read_skill(self, path: Path) -> tuple[dict, str]:
-        return _parse_frontmatter(path.read_text())
+        return [Path(s["path"]) for s in self._registry.list_skills()]
 
     def resolve(self, name: str) -> Path | None:
-        """Find a skill by frontmatter name or directory name."""
-        for path in self._all_skill_files():
-            meta, _ = self._read_skill(path)
-            if meta.get("name") == name or path.parent.name == name:
-                return path
-        return None
+        """Find an enabled skill by frontmatter name or directory name."""
+        entry = self._registry.resolve(name)
+        if entry is None:
+            return None
+        return Path(self._registry.store.local_path(entry.key))
 
     # -- listing / loading --------------------------------------------------
 
     def list_skills(self) -> list[dict]:
-        """All skills as [{name, description, path}] — metadata only, no bodies."""
-        skills = []
-        for path in self._all_skill_files():
-            meta, _ = self._read_skill(path)
-            skills.append(
-                {
-                    "name": str(meta.get("name") or path.parent.name),
-                    "description": str(meta.get("description") or ""),
-                    "path": str(path),
-                }
-            )
-        return skills
+        """Enabled skills as [{name, description, path}] — metadata only, no bodies."""
+        return self._registry.list_skills()
+
+    def list_all(self) -> list[dict]:
+        """Admin view: every skill plus its enabled state."""
+        return self._registry.list_all()
 
     def render_index(self) -> str:
         """System-prompt block: names + descriptions ONLY (progressive disclosure)."""
-        skills = self.list_skills()
-        if not skills:
-            return ""
-        lines = [f"- {s['name']}: {s['description']}" for s in skills]
-        return "<skills_index>\n" + "\n".join(lines) + "\n</skills_index>"
+        return self._registry.render_index()
 
     def load_skill(self, name: str) -> str:
         """Full SKILL.md content — the progressive-disclosure second step."""
-        path = self.resolve(name)
-        if path is None:
-            return f"Rejected: no skill named {name!r}"
-        return path.read_text()
+        return self._registry.load_skill(name)
 
     # -- curation -----------------------------------------------------------
 
-    def _skill_dir(self, name: str, category: str | None = None) -> Path:
-        base = self.skills_dir / category if category else self.skills_dir
-        return base / name
-
-    @staticmethod
-    def _frontmatter(name: str, description: str) -> str:
-        safe_description = description.replace('"', "'")
-        return f"---\nname: {name}\ndescription: \"{safe_description}\"\nversion: 1.0.0\n---\n\n"
-
     def create_skill(self, name: str, description: str, content: str, category: str | None = None) -> str:
-        if not _NAME_RE.match(name):
-            return f"Rejected: skill name must match {_NAME_RE.pattern!r} (got {name!r})"
-        if not _NAME_RE.match(category or "x"):
-            return f"Rejected: category must be a slug (got {category!r})"
-        skill_dir = self._skill_dir(name, category)
-        if (skill_dir / _SKILL_FILE).exists():
-            return f"Rejected: skill {name!r} already exists; use patch or edit"
-        if not content.strip():
-            return "Rejected: skill body is empty"
-        skill_dir.mkdir(parents=True, exist_ok=True)
-        (skill_dir / _SKILL_FILE).write_text(self._frontmatter(name, description) + content.strip() + "\n")
-        return f"OK: created skill {name!r} at {skill_dir / _SKILL_FILE}"
+        return self._registry.create_skill(name, description, content, category)
 
     def patch_skill(self, name: str, old_text: str, new_text: str) -> str:
         """Targeted update (the preferred action): replace one exact string."""
-        path = self.resolve(name)
-        if path is None:
-            return f"Rejected: no skill named {name!r}"
-        text = path.read_text()
-        if old_text not in text:
-            return f"Rejected: old_text not found in {name}'s SKILL.md"
-        path.write_text(text.replace(old_text, new_text, 1))
-        return f"OK: patched {name!r}"
+        return self._registry.patch_skill(name, old_text, new_text)
 
     def edit_skill(self, name: str, content: str) -> str:
         """Full body rewrite (keep frontmatter). Discouraged vs patch."""
-        path = self.resolve(name)
-        if path is None:
-            return f"Rejected: no skill named {name!r}"
-        meta, _ = self._read_skill(path)
-        if not content.strip():
-            return "Rejected: skill body is empty"
-        path.write_text(self._frontmatter(str(meta.get("name") or path.parent.name), str(meta.get("description") or "")) + content.strip() + "\n")
-        return f"OK: rewrote body of {name!r}"
+        return self._registry.edit_skill(name, content)
 
     def delete_skill(self, name: str) -> str:
-        path = self.resolve(name)
-        if path is None:
-            return f"Rejected: no skill named {name!r}"
-        shutil.rmtree(path.parent)
-        return f"OK: deleted skill {name!r}"
-
-    def _guarded_skill_file(self, name: str, relative_path: str) -> Path | str:
-        path = self.resolve(name)
-        if path is None:
-            return f"Rejected: no skill named {name!r}"
-        rel = Path(relative_path)
-        if rel.is_absolute() or ".." in rel.parts or not rel.parts:
-            return f"Rejected: invalid relative path {relative_path!r}"
-        return path.parent / rel
+        return self._registry.delete_skill(name)
 
     def write_skill_file(self, name: str, relative_path: str, content: str) -> str:
-        target = self._guarded_skill_file(name, relative_path)
-        if isinstance(target, str):
-            return target
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content)
-        return f"OK: wrote {relative_path!r} in {name!r}"
+        return self._registry.write_skill_file(name, relative_path, content)
 
     def remove_skill_file(self, name: str, relative_path: str) -> str:
-        target = self._guarded_skill_file(name, relative_path)
-        if isinstance(target, str):
-            return target
-        if not target.exists():
-            return f"Rejected: {relative_path!r} not found in {name!r}"
-        target.unlink()
-        return f"OK: removed {relative_path!r} from {name!r}"
+        return self._registry.remove_skill_file(name, relative_path)
+
+    def set_enabled(self, name: str, enabled: bool) -> str:
+        """Hermes-style toggle. Disabled skills vanish from the index and
+        load_skill until re-enabled (takes full effect next session)."""
+        return self._registry.set_enabled(name, enabled)
 
 
 def create_skill_manage_tool(library: SkillLibrary):
@@ -196,7 +130,7 @@ def create_skill_manage_tool(library: SkillLibrary):
 
     @tool
     def skill_manage(
-        action: Literal["create", "patch", "edit", "delete", "write_file", "remove_file"],
+        action: Literal["create", "patch", "edit", "delete", "write_file", "remove_file", "enable", "disable"],
         name: str,
         description: str = "",
         content: str = "",
@@ -219,7 +153,8 @@ def create_skill_manage_tool(library: SkillLibrary):
                 "patch" (name+old_content+content, exact-string replacement),
                 "edit" (name+content, full body rewrite),
                 "delete" (name), "write_file"/"remove_file" (name+relative_path
-                [+content], e.g. references/notes.md).
+                [+content], e.g. references/notes.md), or "enable"/"disable"
+                (name) to toggle whether a skill appears in the skills index.
             name: skill slug (lowercase letters/digits/-/_).
             description: one sentence describing WHEN to use it (shown in the index).
             content: new text (create body / edit body / write_file contents /
@@ -240,6 +175,8 @@ def create_skill_manage_tool(library: SkillLibrary):
             return library.write_skill_file(name, relative_path, content)
         if action == "remove_file":
             return library.remove_skill_file(name, relative_path)
+        if action in ("enable", "disable"):
+            return library.set_enabled(name, action == "enable")
         return f"Rejected: unknown action {action!r}"
 
     return skill_manage
