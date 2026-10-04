@@ -759,7 +759,7 @@ wheels = [
 
 [[package]]
 name = "nm-memory-layer"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "." }
 dependencies = [
     { name = "langchain-core" },
@@ -786,7 +786,7 @@ requires-dist = [
     { name = "fastembed", marker = "extra == 'wiki-hybrid'", specifier = ">=0.8.0" },
     { name = "langchain-core", specifier = ">=1.0.0" },
     { name = "langchain-openai", specifier = ">=1.6.2" },
-    { name = "nm-skills-registry", git = "https://github.com/trgordonb/nm-skills-registry?branch=main" },
+    { name = "nm-skills-registry", git = "https://github.com/trgordonb/nm-skills-registry?tag=v0.1.1" },
     { name = "numpy", marker = "extra == 'wiki-hybrid'", specifier = ">=1.26" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "sqlite-vec", marker = "extra == 'wiki-hybrid'", specifier = ">=0.1.9" },
@@ -798,8 +798,8 @@ dev = [{ name = "pytest", specifier = ">=9.1.1" }]
 
 [[package]]
 name = "nm-skills-registry"
-version = "0.1.0"
-source = { git = "https://github.com/trgordonb/nm-skills-registry?branch=main#75dc9356f318e88e84cdc52db84537e2d7ce3f0f" }
+version = "0.1.1"
+source = { git = "https://github.com/trgordonb/nm-skills-registry?tag=v0.1.1#9116db07943795acf23ee25c1a5c439191e3c9cc" }
 dependencies = [
     { name = "obstore" },
     { name = "pyyaml" },
