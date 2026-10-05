@@ -11,6 +11,7 @@ Standalone memory layer for AI agents, extracted from the `langgraph-demo` agent
 - **Phase 4: Skills (procedural memory, progressive disclosure)** — `skills.py` — since 2026-10-04, `SkillLibrary` is a facade over `nm-skills-registry` (sibling repo): local dir by default, S3-compatible registry + per-user enable/disable when `SKILLS_REGISTRY` is set (Hermes-style toggles, `skill_manage enable|disable`). Local `skills/` dir stays the materialized working copy either way; behavior pinned by parity tests in both repos.
 - **Search summarization (secondary-LLM condensation of FTS5 excerpts)** — `summarizer.py`
 - **Phase 5: Context compression with lineage** — `compression.py`
+- **Session titling (one-line titles for UI lists)** — `titler.py` (since v0.1.6)
 
 ## Layout
 
@@ -22,6 +23,7 @@ nm_memory_layer/
 ├── nudge.py          # NudgePolicy + nudge prompt + transcript flattener (curation)
 ├── skills.py         # SkillLibrary + skill_manage/load_skill tools (procedural)
 ├── summarizer.py     # Secondary-LLM condensation of session_search excerpts
+├── titler.py         # SessionTitler: one-line session titles (v0.1.6)
 ├── wiki.py           # WikiStore + wiki_search tool (llm-wiki OKF knowledge base)
 └── compression.py    # Pre-flight context compression with lineage
 ```
@@ -69,6 +71,14 @@ load_skill_tool = create_load_skill_tool(library)
 # Search summarization (secondary LLM, env-toggled)
 summarizer = create_openrouter_summarizer()   # None unless enabled+configured
 tool = create_session_search_tool(store, summarizer=summarizer)
+
+# Session titling (v0.1.6; default ON when OpenRouter is configured)
+titler = create_openrouter_titler()           # None if disabled or unconfigured
+store.set_session_title(session_id, fallback_title, model="fallback")  # sync fallback first
+title = titler.title_session(first_user, first_assistant)              # LLM refine; None on failure
+if title:
+    store.set_session_title(session_id, title, model=titler.label)
+# list_sessions() LEFT JOINs session_titles -> each row carries "summary"
 
 # Context compression (Phase 5, env-toggled; uses the OpenRouter model)
 compressor = create_openrouter_compressor()   # None unless enabled+configured
