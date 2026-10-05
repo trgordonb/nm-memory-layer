@@ -94,6 +94,13 @@ class SessionStore:
                 last_turn INTEGER NOT NULL DEFAULT 0
             );
 
+            CREATE TABLE IF NOT EXISTS session_titles (
+                session_id TEXT PRIMARY KEY,
+                summary TEXT NOT NULL,
+                model TEXT,
+                created_at REAL NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS compressions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id TEXT NOT NULL,
@@ -547,12 +554,44 @@ class SessionStore:
     def list_sessions(self) -> list[dict]:
         conn = self._connect()
         rows = conn.execute(
-            "SELECT session_id, created_at, last_turn FROM session_meta ORDER BY created_at DESC"
+            "SELECT m.session_id, m.created_at, m.last_turn, t.summary "
+            "FROM session_meta m "
+            "LEFT JOIN session_titles t ON t.session_id = m.session_id "
+            "ORDER BY m.created_at DESC"
         ).fetchall()
         return [
-            {"session_id": row[0], "created_at": row[1], "turns": row[2]}
+            {
+                "session_id": row[0],
+                "created_at": row[1],
+                "turns": row[2],
+                "summary": row[3],
+            }
             for row in rows
         ]
+
+    def set_session_title(self, session_id: str, summary: str, model: str | None = None) -> None:
+        """Store (or replace) the one-line session title shown in UI lists.
+
+        Written with a synchronous fallback immediately after the first turn
+        (truncated first user message); an optional LLM titler overwrites it
+        with a refined title moments later.
+        """
+        conn = self._connect()
+        with conn:
+            conn.execute(
+                "INSERT INTO session_titles (session_id, summary, model, created_at) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(session_id) DO UPDATE SET "
+                "summary = excluded.summary, model = excluded.model",
+                (session_id, summary, model, time.time()),
+            )
+
+    def get_session_title(self, session_id: str) -> str | None:
+        conn = self._connect()
+        row = conn.execute(
+            "SELECT summary FROM session_titles WHERE session_id = ?", (session_id,)
+        ).fetchone()
+        return row[0] if row else None
 
     # -- Export (offline self-evolution / datagen substrate) -------------------
 

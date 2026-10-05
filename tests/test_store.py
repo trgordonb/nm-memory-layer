@@ -148,3 +148,40 @@ class TestCrossThread:
         messages = store.load_session(sid)  # main thread
         assert len(messages) == 1
         store.close()  # main thread closing a worker-created connection
+
+
+class TestSessionTitles:
+    def test_title_roundtrip_and_listing(self, store):
+        sid = store.new_session_id()
+        store.record_turn(sid, [HumanMessage(content="hello there")])
+        assert store.get_session_title(sid) is None
+        assert store.list_sessions()[0]["summary"] is None
+
+        store.set_session_title(sid, "Quarterly report lookup", model="openrouter:fake")
+        assert store.get_session_title(sid) == "Quarterly report lookup"
+        listing = next(s for s in store.list_sessions() if s["session_id"] == sid)
+        assert listing["summary"] == "Quarterly report lookup"
+
+    def test_title_overwrite(self, store):
+        sid = store.new_session_id()
+        store.record_turn(sid, [HumanMessage(content="hello there")])
+        store.set_session_title(sid, "fallback title")
+        store.set_session_title(sid, "refined title", model="openrouter:fake")
+        assert store.get_session_title(sid) == "refined title"
+
+    def test_title_survives_reconnect(self, tmp_path):
+        from nm_memory_layer import SessionStore as S
+
+        db_path = str(tmp_path / "titles.db")
+        s1 = S(db_path=db_path)
+        sid = s1.new_session_id()
+        s1.record_turn(sid, [HumanMessage(content="hello there")])
+        s1.set_session_title(sid, "persistent title")
+        s1.close()
+
+        s2 = S(db_path=db_path)
+        assert s2.get_session_title(sid) == "persistent title"
+        s2.close()
+
+    def test_title_unknown_session(self, store):
+        assert store.get_session_title("no-such-session") is None

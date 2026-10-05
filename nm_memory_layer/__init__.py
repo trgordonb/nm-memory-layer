@@ -24,6 +24,7 @@ from .temporal import parse_time_range
 from .store import SessionSearchHit, SessionStore, create_session_search_tool
 from .wiki import WikiStore, create_wiki_search_tool
 from .summarizer import SearchSummarizer, SummarizedSearch, create_openrouter_summarizer
+from .titler import SessionTitler, create_openrouter_titler
 
 __all__ = [
     "DEFAULT_COMPRESSION_KEEP_RECENT",
@@ -35,7 +36,9 @@ __all__ = [
     "NudgePolicy",
     "PromptMemory",
     "SearchSummarizer",
+    "SearchSummarizer",
     "SessionSearchHit",
+    "SessionTitler",
     "SessionStore",
     "SkillLibrary",
     "SummarizedSearch",
@@ -44,6 +47,7 @@ __all__ = [
     "create_memory_manage_tool",
     "create_openrouter_compressor",
     "create_openrouter_summarizer",
+    "create_openrouter_titler",
     "create_session_search_tool",
     "create_skill_manage_tool",
     "estimate_tokens",
