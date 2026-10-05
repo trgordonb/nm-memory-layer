@@ -1,6 +1,6 @@
 [project]
 name = "nm-memory-layer"
-version = "0.1.1"
+version = "0.1.2"
 description = "Standalone memory layer for AI agents: SQLite + FTS5 session store (Hermes-style episodic memory)"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -12,7 +12,7 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-nm-skills-registry = { git = "https://github.com/trgordonb/nm-skills-registry", tag = "v0.1.1" }
+nm-skills-registry = { git = "https://github.com/trgordonb/nm-skills-registry", tag = "v0.1.2" }
 
 [build-system]
 requires = ["hatchling"]
